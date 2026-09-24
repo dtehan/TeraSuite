@@ -1,0 +1,452 @@
+persona: database_operations
+test_cases:
+  - id: OPS-001
+    name: Top 5 longest-running queries
+    persona: database_operations
+    category: typical
+    description: Verify the agent can identify the queries with the highest elapsed time, a common daily workload-monitoring check.
+    prompt: What are the 5 longest-running queries today?
+    requires_tables:
+      - DBA_QueryLog
+    expected_output:
+      expected_sql: |
+        SELECT TOP 5 QueryID, UserName, ElapsedSeconds, Status
+        FROM DBA_QueryLog
+        ORDER BY ElapsedSeconds DESC;
+      expected_result:
+        columns: [QueryID, UserName, ElapsedSeconds, Status]
+        row_count: 5
+        row_count_comparator: eq
+        notes: "QueryID 930 (612.40s) must be first, followed by QueryID 931 (45.00s) and QueryID 915 (25.00s)."
+      expected_behavior: return_data
+
+  - id: OPS-002
+    name: Average elapsed time by user
+    persona: database_operations
+    category: typical
+    description: Check per-user average query elapsed time, used to spot which accounts are running the heaviest workloads.
+    prompt: What's the average query elapsed time for each user?
+    requires_tables:
+      - DBA_QueryLog
+    expected_output:
+      expected_sql: |
+        SELECT UserName, AVG(ElapsedSeconds) AS AvgElapsedSeconds, COUNT(*) AS QueryCount
+        FROM DBA_QueryLog
+        GROUP BY UserName
+        ORDER BY AvgElapsedSeconds DESC;
+      expected_result:
+        columns: [UserName, AvgElapsedSeconds, QueryCount]
+        row_count_comparator: gte
+        row_count: 8
+        notes: "svc_etl should have a notably higher average than most interactive users because of ETL/COLLECT STATISTICS jobs."
+      expected_behavior: return_data
+
+  - id: OPS-003
+    name: Query counts by status
+    persona: database_operations
+    category: typical
+    description: Break down queries by completion status to gauge overall system health.
+    prompt: How many queries completed successfully versus failed or were aborted?
+    requires_tables:
+      - DBA_QueryLog
+    expected_output:
+      expected_sql: |
+        SELECT Status, COUNT(*) AS QueryCount
+        FROM DBA_QueryLog
+        GROUP BY Status
+        ORDER BY QueryCount DESC;
+      expected_result:
+        columns: [Status, QueryCount]
+        row_count: 3
+        row_count_comparator: eq
+        notes: "Should show Completed (majority), Aborted (1: QueryID 931), Failed (1: QueryID 913)."
+      expected_behavior: return_data
+
+  - id: OPS-004
+    name: Total spool usage by user
+    persona: database_operations
+    category: typical
+    description: Aggregate spool consumption per user to identify heavy spool consumers.
+    prompt: How much total spool space has each user consumed?
+    requires_tables:
+      - DBA_QueryLog
+    expected_output:
+      expected_sql: |
+        SELECT UserName, SUM(SpoolUsageMB) AS TotalSpoolMB
+        FROM DBA_QueryLog
+        GROUP BY UserName
+        ORDER BY TotalSpoolMB DESC;
+      expected_result:
+        columns: [UserName, TotalSpoolMB]
+        row_count_comparator: gte
+        row_count: 8
+        notes: "svc_etl should rank at or near the top due to QueryID 930's 18500.00 MB spool usage."
+      expected_behavior: return_data
+
+  - id: OPS-005
+    name: Query volume by user
+    persona: database_operations
+    category: typical
+    description: Count how many queries each user has issued, a basic workload distribution check.
+    prompt: How many queries has each user run?
+    requires_tables:
+      - DBA_QueryLog
+    expected_output:
+      expected_sql: |
+        SELECT UserName, COUNT(*) AS QueryCount
+        FROM DBA_QueryLog
+        GROUP BY UserName
+        ORDER BY QueryCount DESC;
+      expected_result:
+        columns: [UserName, QueryCount]
+        row_count_comparator: gte
+        row_count: 8
+      expected_behavior: return_data
+
+  - id: OPS-006
+    name: Most CPU-expensive queries
+    persona: database_operations
+    category: typical
+    description: Identify the queries consuming the most CPU time, distinct from elapsed time, for capacity planning.
+    prompt: Which queries used the most CPU time?
+    requires_tables:
+      - DBA_QueryLog
+    expected_output:
+      expected_sql: |
+        SELECT TOP 5 QueryID, UserName, CPUTime, Status
+        FROM DBA_QueryLog
+        ORDER BY CPUTime DESC;
+      expected_result:
+        columns: [QueryID, UserName, CPUTime, Status]
+        row_count: 5
+        row_count_comparator: eq
+        notes: "QueryID 930 (588.20) should rank first."
+      expected_behavior: return_data
+
+  - id: OPS-007
+    name: Queries touching the Orders table
+    persona: database_operations
+    category: typical
+    description: Find queries whose query text references a specific table, useful for impact analysis before a schema change.
+    prompt: Which queries reference the Orders table?
+    requires_tables:
+      - DBA_QueryLog
+    expected_output:
+      expected_sql: |
+        SELECT QueryID, UserName, QueryText
+        FROM DBA_QueryLog
+        WHERE QueryText LIKE '%Orders%';
+      expected_result:
+        columns: [QueryID, UserName, QueryText]
+        row_count_comparator: gte
+        row_count: 5
+        notes: "Should include QueryID 901, 902, 907, 911, 916, 919, 921, 930, 931 among others since QueryText is a free-text LIKE match."
+      expected_behavior: return_data
+
+  - id: OPS-008
+    name: Queries per hour of day
+    persona: database_operations
+    category: typical
+    description: Understand workload distribution across the day to plan maintenance windows.
+    prompt: What time of day do we see the most query activity?
+    requires_tables:
+      - DBA_QueryLog
+    expected_output:
+      expected_sql: |
+        SELECT EXTRACT(HOUR FROM StartTime) AS HourOfDay, COUNT(*) AS QueryCount
+        FROM DBA_QueryLog
+        GROUP BY HourOfDay
+        ORDER BY QueryCount DESC;
+      expected_result:
+        columns: [HourOfDay, QueryCount]
+        row_count_comparator: gte
+        row_count: 5
+      expected_behavior: return_data
+
+  - id: OPS-009
+    name: Maintenance operations by resource cost
+    persona: database_operations
+    category: typical
+    description: Distinguish maintenance jobs (COLLECT STATISTICS, ALTER TABLE) from user queries when ranking by resource use.
+    prompt: Which maintenance operations, like statistics collection, are consuming the most resources?
+    requires_tables:
+      - DBA_QueryLog
+    expected_output:
+      expected_sql: |
+        SELECT QueryID, UserName, QueryText, ElapsedSeconds, SpoolUsageMB
+        FROM DBA_QueryLog
+        WHERE QueryText LIKE 'COLLECT STATISTICS%' OR QueryText LIKE 'ALTER TABLE%'
+        ORDER BY SpoolUsageMB DESC;
+      expected_result:
+        columns: [QueryID, UserName, QueryText, ElapsedSeconds, SpoolUsageMB]
+        row_count: 2
+        row_count_comparator: eq
+        notes: "QueryID 915 (COLLECT STATISTICS, 800 MB spool, 25s) should rank above QueryID 918 (ALTER TABLE, 40 MB spool)."
+      expected_behavior: return_data
+
+  - id: OPS-010
+    name: ETL/service account activity
+    persona: database_operations
+    category: typical
+    description: Review the workload generated by the svc_etl service account specifically.
+    prompt: Show me all queries run by the svc_etl account.
+    requires_tables:
+      - DBA_QueryLog
+    expected_output:
+      expected_sql: |
+        SELECT QueryID, QueryText, StartTime, ElapsedSeconds, SpoolUsageMB, Status
+        FROM DBA_QueryLog
+        WHERE UserName = 'svc_etl'
+        ORDER BY StartTime;
+      expected_result:
+        columns: [QueryID, QueryText, StartTime, ElapsedSeconds, SpoolUsageMB, Status]
+        row_count: 3
+        row_count_comparator: eq
+        notes: "QueryID 907, 920, 930 all belong to svc_etl."
+      expected_behavior: return_data
+
+  - id: OPS-011
+    name: Queries with high IO count
+    persona: database_operations
+    category: typical
+    description: Identify high-IO queries as candidates for indexing or rewrite review.
+    prompt: Which queries had the highest IO count?
+    requires_tables:
+      - DBA_QueryLog
+    expected_output:
+      expected_sql: |
+        SELECT TOP 3 QueryID, UserName, IOCount, Status
+        FROM DBA_QueryLog
+        ORDER BY IOCount DESC;
+      expected_result:
+        columns: [QueryID, UserName, IOCount, Status]
+        row_count: 3
+        row_count_comparator: eq
+        notes: "QueryID 930 (4,200,000), then 931 (900,000), then 920 (15,000)."
+      expected_behavior: return_data
+
+  - id: OPS-012
+    name: Daily query volume trend
+    persona: database_operations
+    category: typical
+    description: Track number of queries executed per calendar day.
+    prompt: How many queries were run each day?
+    requires_tables:
+      - DBA_QueryLog
+    expected_output:
+      expected_sql: |
+        SELECT CAST(StartTime AS DATE) AS QueryDate, COUNT(*) AS QueryCount
+        FROM DBA_QueryLog
+        GROUP BY QueryDate
+        ORDER BY QueryDate;
+      expected_result:
+        columns: [QueryDate, QueryCount]
+        row_count_comparator: gte
+        row_count: 5
+      expected_behavior: return_data
+
+  - id: OPS-013
+    name: Table space growth check
+    persona: database_operations
+    category: typical
+    description: Correlate table space usage with operational query activity to spot which tables are growing fastest.
+    prompt: Which tables currently use the most perm space?
+    requires_tables:
+      - DBA_TableSpaceUsage
+    expected_output:
+      expected_sql: |
+        SELECT TOP 5 DatabaseName, TableName, CurrentPermMB
+        FROM DBA_TableSpaceUsage
+        ORDER BY CurrentPermMB DESC;
+      expected_result:
+        columns: [DatabaseName, TableName, CurrentPermMB]
+        row_count: 5
+        row_count_comparator: eq
+        notes: "DBA_QueryLog (210.00 MB) should rank first, followed by OrderLine (78.90 MB) and Orders (45.60 MB)."
+      expected_behavior: return_data
+
+  - id: OPS-014
+    name: Queries by account role
+    persona: database_operations
+    category: typical
+    description: Join query activity with user role to understand which categories of accounts drive load.
+    prompt: How much total elapsed query time comes from each type of account role?
+    requires_tables:
+      - DBA_QueryLog
+      - DBA_Users
+    expected_output:
+      expected_sql: |
+        SELECT u.AccountRole, SUM(q.ElapsedSeconds) AS TotalElapsedSeconds
+        FROM DBA_QueryLog q
+        JOIN DBA_Users u ON q.UserName = u.UserName
+        GROUP BY u.AccountRole
+        ORDER BY TotalElapsedSeconds DESC;
+      expected_result:
+        columns: [AccountRole, TotalElapsedSeconds]
+        row_count_comparator: gte
+        row_count: 4
+        notes: "ServiceAccount (svc_etl) should be among the highest due to QueryID 930/920/907."
+      expected_behavior: return_data
+
+  - id: OPS-015
+    name: Queries per week comparison
+    persona: database_operations
+    category: typical
+    description: Compare query volume week over week to detect load trend changes.
+    prompt: How does this week's query volume compare to last week's?
+    requires_tables:
+      - DBA_QueryLog
+    expected_output:
+      expected_sql: |
+        SELECT TD_WEEK_NUMBER_OF_YEAR(CAST(StartTime AS DATE)) AS WeekNum, COUNT(*) AS QueryCount
+        FROM DBA_QueryLog
+        GROUP BY WeekNum
+        ORDER BY WeekNum;
+      expected_result:
+        columns: [WeekNum, QueryCount]
+        row_count_comparator: gte
+        row_count: 1
+        notes: "All seed queries fall within early March 2025, so results may span only 1-2 week buckets; the agent should note the limited date range rather than fabricate a longer trend."
+      expected_behavior: return_data
+
+  - id: OPS-016
+    name: Runaway/expensive query detection
+    persona: database_operations
+    category: edge
+    description: Surface the single most anomalous query by elapsed time and spool usage, an outlier far beyond the rest of the workload.
+    prompt: Are there any runaway queries I should be worried about?
+    requires_tables:
+      - DBA_QueryLog
+    expected_output:
+      expected_sql: |
+        SELECT QueryID, UserName, QueryText, ElapsedSeconds, SpoolUsageMB, IOCount
+        FROM DBA_QueryLog
+        WHERE ElapsedSeconds > 100 OR SpoolUsageMB > 5000
+        ORDER BY ElapsedSeconds DESC;
+      expected_result:
+        columns: [QueryID, UserName, QueryText, ElapsedSeconds, SpoolUsageMB, IOCount]
+        row_count: 2
+        row_count_comparator: eq
+        notes: "Must surface QueryID 930 (612.40s, 18500 MB spool, joins Orders/OrderLine/Product/Customer with no join predicate) and QueryID 931 (45s, 9200 MB, CROSS JOIN, Aborted). QueryID 930 is the standout outlier."
+      expected_behavior: flag_data_quality_issue
+
+  - id: OPS-017
+    name: Investigate aborted queries
+    persona: database_operations
+    category: edge
+    description: Explain why a specific query aborted, requiring the agent to reason about the query text, not just report the status.
+    prompt: Why did query 931 get aborted?
+    requires_tables:
+      - DBA_QueryLog
+    expected_output:
+      expected_sql: |
+        SELECT QueryID, UserName, QueryText, ElapsedSeconds, IOCount, SpoolUsageMB, Status
+        FROM DBA_QueryLog
+        WHERE QueryID = 931;
+      expected_explanation_points:
+        - "QueryID 931's text is 'SELECT * FROM Orders CROSS JOIN OrderLine', an explicit cross join with no join condition."
+        - "This produces a Cartesian product (IOCount 900,000, SpoolUsageMB 9200.00), which is the likely cause of the abort (spool/resource exhaustion)."
+        - "The agent should recommend adding a proper join predicate (e.g. ON Orders.OrderID = OrderLine.OrderID) as the fix."
+      expected_behavior: explain_only
+
+  - id: OPS-018
+    name: Failed query touching a sensitive table
+    persona: database_operations
+    category: edge
+    description: A failed query attempted to read a sensitive administrative table from a low-privilege account; ops monitoring should flag this as worth a security follow-up, not just a routine failure.
+    prompt: Investigate the failed queries — is there anything concerning about them?
+    requires_tables:
+      - DBA_QueryLog
+      - DBA_Users
+    expected_output:
+      expected_sql: |
+        SELECT q.QueryID, q.UserName, u.AccountRole, q.QueryText, q.Status
+        FROM DBA_QueryLog q
+        LEFT JOIN DBA_Users u ON q.UserName = u.UserName
+        WHERE q.Status = 'Failed';
+      expected_result:
+        columns: [QueryID, UserName, AccountRole, QueryText, Status]
+        row_count: 1
+        row_count_comparator: eq
+      expected_explanation_points:
+        - "QueryID 913 failed for user guest_analyst, whose AccountRole is ReadOnly, attempting 'SELECT * FROM DBA_Users'."
+        - "A ReadOnly/guest account attempting to query a sensitive administrative table (DBA_Users) is worth flagging to the security team even though the query failed."
+      expected_behavior: flag_data_quality_issue
+
+  - id: OPS-019
+    name: Activity from accounts that should not be active
+    persona: database_operations
+    category: edge
+    description: Cross-reference query activity against account status to catch a suspended account that still executed a query.
+    prompt: Are there any queries run by accounts that shouldn't be active, like suspended users?
+    requires_tables:
+      - DBA_QueryLog
+      - DBA_Users
+    expected_output:
+      expected_sql: |
+        SELECT q.QueryID, q.UserName, u.AccountRole, q.StartTime, q.Status
+        FROM DBA_QueryLog q
+        JOIN DBA_Users u ON q.UserName = u.UserName
+        WHERE u.AccountRole = 'Suspended';
+      expected_result:
+        columns: [QueryID, UserName, AccountRole, StartTime, Status]
+        row_count: 1
+        row_count_comparator: eq
+        notes: "QueryID 932 was run by suspended_analyst, whose AccountRole is 'Suspended' — this should not have been possible and is a hygiene/security concern."
+      expected_behavior: flag_data_quality_issue
+
+  - id: OPS-020
+    name: Query text pattern match with no matches
+    persona: database_operations
+    category: edge
+    description: Search for queries referencing a table name that was never actually queried, to confirm the agent returns an empty result rather than guessing.
+    prompt: Have any queries referenced a table called ShipmentTracking?
+    requires_tables:
+      - DBA_QueryLog
+    expected_output:
+      expected_sql: |
+        SELECT QueryID, UserName, QueryText
+        FROM DBA_QueryLog
+        WHERE QueryText LIKE '%ShipmentTracking%';
+      expected_result:
+        columns: [QueryID, UserName, QueryText]
+        row_count: 0
+        row_count_comparator: eq
+        notes: "No QueryText in the seed data mentions 'ShipmentTracking'; the agent must return an empty result rather than fabricating a match."
+      expected_behavior: return_empty_result
+
+  - id: OPS-021
+    name: Query with missing/blank query text
+    persona: database_operations
+    category: edge
+    description: Confirm the agent handles a request to find queries with no logged text gracefully, even though no such rows exist in this dataset.
+    prompt: Are there any queries in the log with missing or blank query text?
+    requires_tables:
+      - DBA_QueryLog
+    expected_output:
+      expected_sql: |
+        SELECT QueryID, UserName, StartTime
+        FROM DBA_QueryLog
+        WHERE QueryText IS NULL OR TRIM(QueryText) = '';
+      expected_result:
+        columns: [QueryID, UserName, StartTime]
+        row_count: 0
+        row_count_comparator: eq
+        notes: "Every seeded DBA_QueryLog row has non-blank QueryText, so this should return an empty result, confirmed as a genuine data-quality check rather than an error."
+      expected_behavior: return_empty_result
+
+  - id: OPS-022
+    name: Ambiguous "is the system healthy" prompt
+    persona: database_operations
+    category: edge
+    description: A vague health-check prompt with no specific metric should prompt the agent to clarify scope or proactively summarize the key health signals it has.
+    prompt: Is the system healthy right now?
+    requires_tables:
+      - DBA_QueryLog
+      - DBA_TableSpaceUsage
+    expected_output:
+      expected_explanation_points:
+        - "Acceptable response A: ask a clarifying question about what 'healthy' should cover (e.g. query failures, runaway queries, space usage, specific time window)."
+        - "Acceptable response B: proactively summarize the top signals available in the data — e.g. 1 aborted query (931), 1 failed query (913), 1 runaway query (930), and 2 tables with no statistics collected — rather than fabricating an overall health score."
+        - "Not acceptable: a confident single-word 'yes'/'no' health verdict with no supporting evidence."
+      expected_behavior: ask_clarifying_question

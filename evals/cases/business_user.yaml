@@ -1,0 +1,401 @@
+persona: business_user
+test_cases:
+  - id: BU-001
+    name: Total revenue last month
+    persona: business_user
+    category: typical
+    description: Classic "how are we doing" revenue question from a manager.
+    prompt: "How much revenue did we bring in during February 2025?s"
+    requires_tables: [Orders, OrderLine]
+    expected_output:
+      expected_sql: >
+        SELECT SUM(ol.LineTotal) AS FebRevenue
+        FROM Orders o
+        JOIN OrderLine ol ON o.OrderID = ol.OrderID
+        WHERE o.OrderDate BETWEEN DATE '2025-02-01' AND DATE '2025-02-28';
+      expected_result:
+        columns: [FebRevenue]
+        row_count: 1
+      expected_explanation_points:
+        - "Answer should be a single dollar figure covering February 2025 orders."
+      expected_behavior: return_data
+
+  - id: BU-002
+    name: Who are our best customers
+    persona: business_user
+    category: typical
+    description: Simple top-customer question for account management.
+    prompt: "Who are our top 5 customers by total spend?"
+    requires_tables: [Customer, Orders, OrderLine]
+    expected_output:
+      expected_sql: >
+        SELECT c.CustomerName, SUM(ol.LineTotal) AS TotalSpend
+        FROM Customer c
+        JOIN Orders o ON c.CustomerID = o.CustomerID
+        JOIN OrderLine ol ON o.OrderID = ol.OrderID
+        GROUP BY c.CustomerName
+        QUALIFY RANK() OVER (ORDER BY SUM(ol.LineTotal) DESC) <= 5
+        ORDER BY TotalSpend DESC;
+      expected_result:
+        columns: [CustomerName, TotalSpend]
+        row_count: 5
+      expected_behavior: return_data
+
+  - id: BU-003
+    name: Best selling products
+    persona: business_user
+    category: typical
+    description: Merchandising question about what's popular.
+    prompt: "What are our best-selling products right now?"
+    requires_tables: [Product, OrderLine]
+    expected_output:
+      expected_sql: >
+        SELECT p.ProductName, SUM(ol.Quantity) AS UnitsSold
+        FROM Product p
+        JOIN OrderLine ol ON p.ProductID = ol.ProductID
+        WHERE p.Discontinued = 'N'
+        GROUP BY p.ProductName
+        ORDER BY UnitsSold DESC;
+      expected_result:
+        columns: [ProductName, UnitsSold]
+        row_count_comparator: gte
+        row_count: 5
+        notes: "Should exclude discontinued products (Analog Shop Radio) since the question is about what's selling 'right now'."
+      expected_behavior: return_data
+
+  - id: BU-004
+    name: Sales by region
+    persona: business_user
+    category: typical
+    description: Regional performance snapshot for leadership.
+    prompt: "How are sales split across our regions?"
+    requires_tables: [Customer, Orders, OrderLine]
+    expected_output:
+      expected_sql: >
+        SELECT c.Region, SUM(ol.LineTotal) AS RegionRevenue
+        FROM Customer c
+        JOIN Orders o ON c.CustomerID = o.CustomerID
+        JOIN OrderLine ol ON o.OrderID = ol.OrderID
+        GROUP BY c.Region
+        ORDER BY RegionRevenue DESC;
+      expected_result:
+        columns: [Region, RegionRevenue]
+        row_count: 4
+      expected_behavior: return_data
+
+  - id: BU-005
+    name: How many orders do we get
+    persona: business_user
+    category: typical
+    description: Basic volume question.
+    prompt: "How many orders have we received so far?"
+    requires_tables: [Orders]
+    expected_output:
+      expected_sql: "SELECT COUNT(*) AS TotalOrders FROM Orders;"
+      expected_result:
+        columns: [TotalOrders]
+        row_count: 1
+        notes: "Expect 30."
+      expected_behavior: return_data
+
+  - id: BU-006
+    name: Underperforming stores
+    persona: business_user
+    category: typical
+    description: Manager wants to know which locations need attention.
+    prompt: "Which of our stores is underperforming compared to the others?"
+    requires_tables: [Store, Orders, OrderLine]
+    expected_output:
+      expected_sql: >
+        SELECT s.StoreName, SUM(ol.LineTotal) AS TotalRevenue
+        FROM Store s
+        JOIN Orders o ON s.StoreID = o.StoreID
+        JOIN OrderLine ol ON o.OrderID = ol.OrderID
+        GROUP BY s.StoreName
+        ORDER BY TotalRevenue ASC;
+      expected_result:
+        columns: [StoreName, TotalRevenue]
+        row_count: 5
+      expected_explanation_points:
+        - "Should identify the store(s) with the lowest total revenue relative to peers, not just dump raw numbers with no comparison."
+      expected_behavior: return_data
+
+  - id: BU-007
+    name: Customer counts by segment
+    persona: business_user
+    category: typical
+    description: Basic customer-base composition question.
+    prompt: "How many customers do we have in each segment?"
+    requires_tables: [Customer]
+    expected_output:
+      expected_sql: "SELECT Segment, COUNT(*) AS CustomerCount FROM Customer GROUP BY Segment ORDER BY CustomerCount DESC;"
+      expected_result:
+        columns: [Segment, CustomerCount]
+        row_count: 3
+      expected_behavior: return_data
+
+  - id: BU-008
+    name: Compare two stores
+    persona: business_user
+    category: typical
+    description: Head-to-head comparison between two named stores.
+    prompt: "How does Riverside Hardware compare to Pacific Trade Depot in terms of sales?"
+    requires_tables: [Store, Orders, OrderLine]
+    expected_output:
+      expected_sql: >
+        SELECT s.StoreName, SUM(ol.LineTotal) AS TotalRevenue
+        FROM Store s
+        JOIN Orders o ON s.StoreID = o.StoreID
+        JOIN OrderLine ol ON o.OrderID = ol.OrderID
+        WHERE s.StoreName IN ('Riverside Hardware', 'Pacific Trade Depot')
+        GROUP BY s.StoreName;
+      expected_result:
+        columns: [StoreName, TotalRevenue]
+        row_count: 2
+      expected_behavior: return_data
+
+  - id: BU-009
+    name: Repeat customers
+    persona: business_user
+    category: typical
+    description: Loyalty/retention style question.
+    prompt: "How many of our customers have ordered more than once?"
+    requires_tables: [Customer, Orders]
+    expected_output:
+      expected_sql: >
+        SELECT COUNT(*) AS RepeatCustomerCount
+        FROM (SELECT CustomerID FROM Orders GROUP BY CustomerID HAVING COUNT(*) > 1) t;
+      expected_result:
+        columns: [RepeatCustomerCount]
+        row_count: 1
+      expected_behavior: return_data
+
+  - id: BU-010
+    name: Average order size
+    persona: business_user
+    category: typical
+    description: Basic "typical purchase" question.
+    prompt: "What's the average amount a customer spends per order?"
+    requires_tables: [Orders, OrderLine]
+    expected_output:
+      expected_sql: >
+        SELECT AVG(OrderTotal) AS AvgOrderValue
+        FROM (SELECT OrderID, SUM(LineTotal) AS OrderTotal FROM OrderLine GROUP BY OrderID) t;
+      expected_result:
+        columns: [AvgOrderValue]
+        row_count: 1
+      expected_behavior: return_data
+
+  - id: BU-011
+    name: Sales by employee department
+    persona: business_user
+    category: typical
+    description: Staffing-related business question.
+    prompt: "How many people work in each department?"
+    requires_tables: [Employee]
+    expected_output:
+      expected_sql: "SELECT Department, COUNT(*) AS Headcount FROM Employee GROUP BY Department ORDER BY Headcount DESC;"
+      expected_result:
+        columns: [Department, Headcount]
+        row_count: 5
+      expected_behavior: return_data
+
+  - id: BU-012
+    name: Which product category sells the most
+    persona: business_user
+    category: typical
+    description: Product-mix question for buying decisions.
+    prompt: "Which product category is our biggest earner?"
+    requires_tables: [Product, OrderLine]
+    expected_output:
+      expected_sql: >
+        SELECT p.Category, SUM(ol.LineTotal) AS CategoryRevenue
+        FROM Product p
+        JOIN OrderLine ol ON p.ProductID = ol.ProductID
+        GROUP BY p.Category
+        ORDER BY CategoryRevenue DESC;
+      expected_result:
+        columns: [Category, CategoryRevenue]
+        row_count_comparator: gte
+        row_count: 8
+      expected_behavior: return_data
+
+  - id: BU-013
+    name: New customers this year
+    persona: business_user
+    category: typical
+    description: Growth-tracking question.
+    prompt: "How many new customers have signed up this year?"
+    requires_tables: [Customer]
+    expected_output:
+      expected_sql: "SELECT COUNT(*) AS NewCustomers FROM Customer WHERE EXTRACT(YEAR FROM SignupDate) = 2025;"
+      expected_result:
+        columns: [NewCustomers]
+        row_count: 1
+        notes: "Expect 1 (Olivia Chen, signed up 2024-06-30, is NOT in 2025 -- double check; actually only customers with SignupDate in 2025 count, which may be zero)."
+      expected_behavior: return_data
+
+  - id: BU-014
+    name: Order status overview
+    persona: business_user
+    category: typical
+    description: Plain-language ops health check.
+    prompt: "Give me a quick overview of our order statuses -- how many are done, cancelled, etc."
+    requires_tables: [Orders]
+    expected_output:
+      expected_sql: "SELECT Status, COUNT(*) AS OrderCount FROM Orders GROUP BY Status ORDER BY OrderCount DESC;"
+      expected_result:
+        columns: [Status, OrderCount]
+        row_count: 4
+      expected_behavior: return_data
+
+  - id: BU-015
+    name: Most valuable region for growth
+    persona: business_user
+    category: typical
+    description: Strategic planning style question.
+    prompt: "Which region should we invest more marketing budget in based on current customer spend?"
+    requires_tables: [Customer, Orders, OrderLine]
+    expected_output:
+      expected_sql: >
+        SELECT c.Region, SUM(ol.LineTotal) AS RegionRevenue, COUNT(DISTINCT c.CustomerID) AS CustomerCount
+        FROM Customer c
+        JOIN Orders o ON c.CustomerID = o.CustomerID
+        JOIN OrderLine ol ON o.OrderID = ol.OrderID
+        GROUP BY c.Region
+        ORDER BY RegionRevenue DESC;
+      expected_result:
+        columns: [Region, RegionRevenue, CustomerCount]
+        row_count: 4
+      expected_explanation_points:
+        - "Should present data plus a reasoned recommendation, not just raw numbers, since this is a judgment/strategy question."
+      expected_behavior: return_data
+
+  - id: BU-016
+    name: Store manager lookup
+    persona: business_user
+    category: typical
+    description: Simple lookup question.
+    prompt: "Who manages the Downtown Supply Co. store?"
+    requires_tables: [Store]
+    expected_output:
+      expected_sql: "SELECT ManagerName FROM Store WHERE StoreName = 'Downtown Supply Co.';"
+      expected_result:
+        columns: [ManagerName]
+        row_count: 1
+        notes: "Expect 'Tara Whitfield'."
+      expected_behavior: return_data
+
+  - id: BU-017
+    name: Customer with no purchase history
+    persona: business_user
+    category: edge
+    description: >
+      CustomerID 115 (Olivia Chen) has zero orders. Asking about "all
+      customer activity" or a specific top-customer question involving her
+      should be handled gracefully, not throw an error or fabricate orders.
+    prompt: "Can you show me all the orders Olivia Chen has placed with us?"
+    requires_tables: [Customer, Orders]
+    expected_output:
+      expected_sql: >
+        SELECT o.OrderID, o.OrderDate, o.Status
+        FROM Customer c
+        LEFT JOIN Orders o ON c.CustomerID = o.CustomerID
+        WHERE c.CustomerName = 'Olivia Chen';
+      expected_result:
+        columns: [OrderID, OrderDate, Status]
+        row_count: 0
+      expected_explanation_points:
+        - "Should clearly state Olivia Chen has no orders on record rather than returning an error or inventing data."
+      expected_behavior: return_empty_result
+
+  - id: BU-018
+    name: Sales by region with an unassigned region
+    persona: business_user
+    category: edge
+    description: >
+      Store 305 (Online Fulfillment Center) has Region = NULL. A "sales by
+      region" breakdown must surface orders from that store, not silently
+      drop them because the region field is blank.
+    prompt: "Break down total sales by region for me."
+    requires_tables: [Store, Orders, OrderLine]
+    expected_output:
+      expected_sql: >
+        SELECT s.Region, SUM(ol.LineTotal) AS TotalRevenue
+        FROM Store s
+        JOIN Orders o ON s.StoreID = o.StoreID
+        JOIN OrderLine ol ON o.OrderID = ol.OrderID
+        GROUP BY s.Region
+        ORDER BY TotalRevenue DESC;
+      expected_result:
+        columns: [Region, TotalRevenue]
+        row_count: 5
+      expected_explanation_points:
+        - "One row/segment should represent the Online Fulfillment Center's sales even though it has no assigned region -- it should be labeled as unassigned/unknown, not dropped from the total."
+      expected_behavior: return_data
+
+  - id: BU-019
+    name: Ambiguous revenue question including cancelled orders
+    persona: business_user
+    category: edge
+    description: >
+      A vague "how much did we make" question is ambiguous about whether
+      Cancelled/Pending/Returned orders should count. The agent should not
+      silently overstate revenue by including them.
+    prompt: "How much money did we make this quarter?"
+    requires_tables: [Orders, OrderLine]
+    expected_output:
+      expected_explanation_points:
+        - "The agent should clarify whether the figure should include only Completed orders, or explicitly state that assumption when answering."
+        - "It must not present a total that silently includes Cancelled or Returned orders as revenue without calling that out."
+      expected_behavior: ask_clarifying_question
+
+  - id: BU-020
+    name: Question about data not tracked
+    persona: business_user
+    category: edge
+    description: >
+      Business user asks about something the schema has no data for
+      (customer satisfaction/NPS). The agent should say the data isn't
+      available rather than make up a number.
+    prompt: "What's our customer satisfaction score been trending like?"
+    requires_tables: [Customer]
+    expected_output:
+      expected_explanation_points:
+        - "The agent should state that customer satisfaction / NPS data is not present in this database, rather than fabricating a trend or score."
+      expected_behavior: explain_only
+
+  - id: BU-021
+    name: Products still being sold that are actually discontinued
+    persona: business_user
+    category: edge
+    description: >
+      ProductID 215 (Analog Shop Radio) is marked Discontinued = 'Y' but
+      still shows up in historical order data from 2022. A "what can
+      customers buy today" question must not list it as currently available.
+    prompt: "What products can customers currently buy from us?"
+    requires_tables: [Product]
+    expected_output:
+      expected_sql: "SELECT ProductName, Category, UnitPrice FROM Product WHERE Discontinued = 'N';"
+      expected_result:
+        columns: [ProductName, Category, UnitPrice]
+        row_count: 14
+        notes: "Must exclude the Analog Shop Radio (ProductID 215), which is discontinued."
+      expected_behavior: return_data
+
+  - id: BU-022
+    name: Vague recent-activity question with no matching data
+    persona: business_user
+    category: edge
+    description: >
+      "Lately" is vague; if interpreted as a narrow recent window (e.g. the
+      last 7 days from today's real-world date) there may be zero matching
+      orders since all seeded data is dated 2022-2025 and static. The agent
+      should report that clearly instead of fabricating recent activity.
+    prompt: "How have sales been lately?"
+    requires_tables: [Orders, OrderLine]
+    expected_output:
+      expected_explanation_points:
+        - "The agent should clarify what time window 'lately' means, or explicitly state the window it used."
+        - "If it picks a narrow window (e.g. last 7 days) with no matching seeded data, it must say there is no recent order activity rather than inventing a trend."
+      expected_behavior: ask_clarifying_question

@@ -1,0 +1,353 @@
+persona: dba
+test_cases:
+  - id: DBA-001
+    name: Perm space usage by table
+    persona: dba
+    category: typical
+    description: DBA wants to see current permanent space usage across all tables to plan capacity.
+    prompt: Show me the current permanent space usage for every table, largest first.
+    requires_tables:
+      - DBA_TableSpaceUsage
+    expected_output:
+      expected_sql: "SELECT TableName, CurrentPermMB FROM DBA_TableSpaceUsage ORDER BY CurrentPermMB DESC;"
+      expected_result:
+        columns: ["TableName", "CurrentPermMB"]
+        row_count: 11
+        notes: "DBA_QueryLog (210.00 MB) should be first, DBA_TableSpaceUsage (1.10 MB) last."
+      expected_behavior: return_data
+
+  - id: DBA-002
+    name: Total database space
+    persona: dba
+    category: typical
+    description: DBA wants total current perm space consumed by the whole database.
+    prompt: What is the total current permanent space used across the whole TeraTestingDB database?
+    requires_tables:
+      - DBA_TableSpaceUsage
+    expected_output:
+      expected_sql: "SELECT SUM(CurrentPermMB) AS TotalCurrentPermMB FROM DBA_TableSpaceUsage;"
+      expected_result:
+        columns: ["TotalCurrentPermMB"]
+        row_count: 1
+        notes: "Sum of all 11 CurrentPermMB values, approximately 387.85 MB."
+      expected_behavior: return_data
+
+  - id: DBA-003
+    name: Users by account role
+    persona: dba
+    category: typical
+    description: DBA wants a count of users grouped by their account role for an access review.
+    prompt: How many users do we have in each account role?
+    requires_tables:
+      - DBA_Users
+    expected_output:
+      expected_sql: "SELECT AccountRole, COUNT(*) AS UserCount FROM DBA_Users GROUP BY AccountRole ORDER BY UserCount DESC;"
+      expected_result:
+        columns: ["AccountRole", "UserCount"]
+        row_count: 6
+        notes: "Roles present: DBA(2), Security(2), Analyst(2), Developer(2), ServiceAccount(1), ReadOnly(2), Suspended(1) -- 7 distinct roles is also an acceptable grouping depending on exact bucketing."
+        row_count_comparator: gte
+      expected_behavior: return_data
+
+  - id: DBA-004
+    name: Grants on the Customer table
+    persona: dba
+    category: typical
+    description: DBA needs to know which users currently have access to the Customer table before a schema change.
+    prompt: List every user who has been granted access to the Customer table and what type of access they have.
+    requires_tables:
+      - DBA_AccessRights
+    expected_output:
+      expected_sql: "SELECT UserName, AccessType, GrantedBy, GrantDate FROM DBA_AccessRights WHERE TableName = 'Customer' ORDER BY UserName;"
+      expected_result:
+        columns: ["UserName", "AccessType", "GrantedBy", "GrantDate"]
+        row_count: 4
+        notes: "svc_etl, jsmith_ds, guest_analyst, suspended_analyst all have grants on Customer."
+      expected_behavior: return_data
+
+  - id: DBA-005
+    name: All grants for a specific user
+    persona: dba
+    category: typical
+    description: DBA wants a full access profile for one user, e.g. before an offboarding review.
+    prompt: What tables and access types has asingh_dev been granted?
+    requires_tables:
+      - DBA_AccessRights
+    expected_output:
+      expected_sql: "SELECT TableName, AccessType, GrantedBy, GrantDate FROM DBA_AccessRights WHERE UserName = 'asingh_dev' ORDER BY TableName, AccessType;"
+      expected_result:
+        columns: ["TableName", "AccessType", "GrantedBy", "GrantDate"]
+        row_count: 3
+        notes: "SELECT, INSERT, UPDATE all on Product."
+      expected_behavior: return_data
+
+  - id: DBA-006
+    name: Space growth vs peak
+    persona: dba
+    category: typical
+    description: DBA wants to compare current vs peak space per table to spot tables that have shrunk.
+    prompt: Which tables have a current perm space smaller than their peak perm space, and by how much?
+    requires_tables:
+      - DBA_TableSpaceUsage
+    expected_output:
+      expected_sql: "SELECT TableName, CurrentPermMB, PeakPermMB, (PeakPermMB - CurrentPermMB) AS DeltaMB FROM DBA_TableSpaceUsage WHERE PeakPermMB > CurrentPermMB ORDER BY DeltaMB DESC;"
+      expected_result:
+        columns: ["TableName", "CurrentPermMB", "PeakPermMB", "DeltaMB"]
+        row_count: 1
+        notes: "Only DBA_SecurityAuditLog qualifies (Current 15.00 vs Peak 62.00, delta 47.00)."
+      expected_behavior: return_data
+
+  - id: DBA-007
+    name: User space allocation report
+    persona: dba
+    category: typical
+    description: DBA wants perm and spool space allocations for every user for a quarterly capacity report.
+    prompt: Give me a report of perm space and spool space allocated to each user, sorted by perm space descending.
+    requires_tables:
+      - DBA_Users
+    expected_output:
+      expected_sql: "SELECT UserName, PermSpaceMB, SpoolSpaceMB FROM DBA_Users ORDER BY PermSpaceMB DESC;"
+      expected_result:
+        columns: ["UserName", "PermSpaceMB", "SpoolSpaceMB"]
+        row_count: 12
+        notes: "dbaadmin (500000.00) has the largest allocation."
+      expected_behavior: return_data
+
+  - id: DBA-008
+    name: Tables never analyzed
+    persona: dba
+    category: typical
+    description: DBA is running routine maintenance and wants tables missing statistics collection.
+    prompt: Which tables have never had statistics collected on them?
+    requires_tables:
+      - DBA_TableSpaceUsage
+    expected_output:
+      expected_sql: "SELECT TableName FROM DBA_TableSpaceUsage WHERE LastStatsCollectionDate IS NULL;"
+      expected_result:
+        columns: ["TableName"]
+        row_count: 2
+        notes: "Employee and DBA_QueryLog both have NULL LastStatsCollectionDate."
+      expected_behavior: return_data
+
+  - id: DBA-009
+    name: Row counts per table
+    persona: dba
+    category: typical
+    description: DBA wants row counts across tables to sanity-check load volumes.
+    prompt: Show me the row count for every table we're tracking space for.
+    requires_tables:
+      - DBA_TableSpaceUsage
+    expected_output:
+      expected_sql: "SELECT TableName, RowCount FROM DBA_TableSpaceUsage ORDER BY TableName;"
+      expected_result:
+        columns: ["TableName", "RowCount"]
+        row_count: 11
+      expected_behavior: return_data
+
+  - id: DBA-010
+    name: Users created before a given date
+    persona: dba
+    category: typical
+    description: DBA is auditing legacy accounts created before a cutoff date.
+    prompt: Which user accounts were created before 2020?
+    requires_tables:
+      - DBA_Users
+    expected_output:
+      expected_sql: "SELECT UserName, CreateDate, AccountRole FROM DBA_Users WHERE CreateDate < DATE '2020-01-01' ORDER BY CreateDate;"
+      expected_result:
+        columns: ["UserName", "CreateDate", "AccountRole"]
+        row_count: 4
+        notes: "dbaadmin (2017), secadmin (2018), ebrar (2018), svc_etl (2019)."
+      expected_behavior: return_data
+
+  - id: DBA-011
+    name: Grant activity by grantor
+    persona: dba
+    category: typical
+    description: DBA wants to know how many grants a given administrator has issued, for a segregation-of-duties review.
+    prompt: How many access grants has dbaadmin issued in total?
+    requires_tables:
+      - DBA_AccessRights
+    expected_output:
+      expected_sql: "SELECT COUNT(*) AS GrantsIssued FROM DBA_AccessRights WHERE GrantedBy = 'dbaadmin';"
+      expected_result:
+        columns: ["GrantsIssued"]
+        row_count: 1
+        notes: "dbaadmin granted all 20 rows in DBA_AccessRights."
+      expected_behavior: return_data
+
+  - id: DBA-012
+    name: Service account privilege scope
+    persona: dba
+    category: typical
+    description: DBA reviewing the blast radius of the ETL service account.
+    prompt: What write access does the svc_etl service account have, and on which tables?
+    requires_tables:
+      - DBA_AccessRights
+    expected_output:
+      expected_sql: "SELECT TableName, AccessType FROM DBA_AccessRights WHERE UserName = 'svc_etl' AND AccessType IN ('INSERT','UPDATE','DELETE','ALL') ORDER BY TableName;"
+      expected_result:
+        columns: ["TableName", "AccessType"]
+        row_count: 4
+        notes: "INSERT on Customer, Orders, OrderLine, Product."
+      expected_behavior: return_data
+
+  - id: DBA-013
+    name: Tables largest by row count
+    persona: dba
+    category: typical
+    description: DBA wants to identify the largest tables by row count for index/partitioning review.
+    prompt: Which three tables have the most rows?
+    requires_tables:
+      - DBA_TableSpaceUsage
+    expected_output:
+      expected_sql: "SELECT TOP 3 TableName, RowCount FROM DBA_TableSpaceUsage ORDER BY RowCount DESC;"
+      expected_result:
+        columns: ["TableName", "RowCount"]
+        row_count: 3
+        notes: "OrderLine (45), Orders (25 tie with DBA_QueryLog/DBA_SecurityAuditLog) -- accept any consistent top-3 by RowCount."
+      expected_behavior: return_data
+
+  - id: DBA-014
+    name: Users with no default database set
+    persona: dba
+    category: typical
+    description: DBA wants to confirm all users have a default database configured.
+    prompt: Are there any users without a default database configured?
+    requires_tables:
+      - DBA_Users
+    expected_output:
+      expected_sql: "SELECT UserName FROM DBA_Users WHERE DefaultDatabase IS NULL;"
+      expected_result:
+        columns: ["UserName"]
+        row_count: 0
+        notes: "All 12 seeded users have DefaultDatabase = 'TeraTestingDB'."
+      expected_behavior: return_empty_result
+
+  - id: DBA-015
+    name: Read-only vs write users on Orders
+    persona: dba
+    category: typical
+    description: DBA wants to separate read-only from write-capable users on a sensitive table.
+    prompt: Split the users who have access to the Orders table into read-only versus those who can modify it.
+    requires_tables:
+      - DBA_AccessRights
+    expected_output:
+      expected_explanation_points:
+        - "jsmith_ds and smarchetti have only SELECT on Orders (read-only)."
+        - "mgarcia_ops has ALL on Orders (read and write)."
+        - "svc_etl has INSERT on Orders (write, but not full ALL access)."
+      expected_behavior: return_data
+
+  - id: DBA-016
+    name: Stale grant referencing a dropped table
+    persona: dba
+    category: edge
+    description: A grant exists for a table name that does not appear anywhere in the current schema, indicating a stale/orphaned grant left over from a rename or drop.
+    prompt: List all access grants and flag any that reference a table that doesn't actually exist in the database.
+    requires_tables:
+      - DBA_AccessRights
+    expected_output:
+      expected_sql: "SELECT AccessID, UserName, TableName FROM DBA_AccessRights WHERE TableName NOT IN ('Customer','Product','Store','Orders','OrderLine','Employee','DBA_Users','DBA_AccessRights','DBA_SecurityAuditLog','DBA_QueryLog','DBA_TableSpaceUsage');"
+      expected_result:
+        columns: ["AccessID", "UserName", "TableName"]
+        row_count: 1
+        notes: "AccessID 719 grants former_contractor SELECT on 'LegacyShipmentTbl', which is not a real table in this schema."
+      expected_behavior: flag_data_quality_issue
+
+  - id: DBA-017
+    name: Active grant for a suspended account
+    persona: dba
+    category: edge
+    description: A user whose account role is Suspended still has an active, unrevoked grant -- a security/governance gap.
+    prompt: Does suspended_analyst still have any active access grants, and should they?
+    requires_tables:
+      - DBA_AccessRights
+      - DBA_Users
+    expected_output:
+      expected_sql: "SELECT ar.UserName, ar.TableName, ar.AccessType, u.AccountRole FROM DBA_AccessRights ar JOIN DBA_Users u ON ar.UserName = u.UserName WHERE u.AccountRole = 'Suspended';"
+      expected_result:
+        columns: ["UserName", "TableName", "AccessType", "AccountRole"]
+        row_count: 1
+        notes: "suspended_analyst still has SELECT on Customer (AccessID 720) despite AccountRole = 'Suspended' -- this grant should likely be revoked."
+      expected_behavior: flag_data_quality_issue
+
+  - id: DBA-018
+    name: Space purge detection
+    persona: dba
+    category: edge
+    description: A table's current space is far below its historical peak, which can indicate an unlogged purge or archival event worth investigating.
+    prompt: Has any table had a large drop in space usage compared to its historical peak that we should look into?
+    requires_tables:
+      - DBA_TableSpaceUsage
+    expected_output:
+      expected_sql: "SELECT TableName, CurrentPermMB, PeakPermMB FROM DBA_TableSpaceUsage WHERE (PeakPermMB - CurrentPermMB) / PeakPermMB > 0.5;"
+      expected_result:
+        columns: ["TableName", "CurrentPermMB", "PeakPermMB"]
+        row_count: 1
+        notes: "DBA_SecurityAuditLog dropped from 62.00 MB peak to 15.00 MB current (~76% reduction), consistent with an archival/purge of older audit records."
+      expected_behavior: flag_data_quality_issue
+
+  - id: DBA-019
+    name: Never-analyzed high-traffic table
+    persona: dba
+    category: edge
+    description: DBA_QueryLog is one of the larger tables by space but has never had statistics collected, which could hurt optimizer plans for queries against it.
+    prompt: Is our biggest table missing statistics collection?
+    requires_tables:
+      - DBA_TableSpaceUsage
+    expected_output:
+      expected_sql: "SELECT TableName, CurrentPermMB, LastStatsCollectionDate FROM DBA_TableSpaceUsage WHERE LastStatsCollectionDate IS NULL ORDER BY CurrentPermMB DESC;"
+      expected_result:
+        columns: ["TableName", "CurrentPermMB", "LastStatsCollectionDate"]
+        row_count: 2
+        notes: "DBA_QueryLog (210.00 MB, the largest table overall) has no stats collected, ahead of Employee (6.40 MB)."
+      expected_behavior: flag_data_quality_issue
+
+  - id: DBA-020
+    name: Dormant account still provisioned
+    persona: dba
+    category: edge
+    description: An ex-contractor account remains active in DBA_Users with almost no recent query activity, suggesting it should be reviewed for deprovisioning.
+    prompt: Is the former_contractor account still being used, or should it be removed?
+    requires_tables:
+      - DBA_Users
+      - DBA_QueryLog
+    expected_output:
+      expected_sql: "SELECT u.UserName, u.AccountRole, COUNT(q.QueryID) AS QueryCount FROM DBA_Users u LEFT JOIN DBA_QueryLog q ON u.UserName = q.UserName WHERE u.UserName = 'former_contractor' GROUP BY u.UserName, u.AccountRole;"
+      expected_result:
+        columns: ["UserName", "AccountRole", "QueryCount"]
+        row_count: 1
+        notes: "former_contractor has QueryCount = 0 in DBA_QueryLog, suggesting the account is dormant and a deprovisioning candidate."
+      expected_behavior: flag_data_quality_issue
+
+  - id: DBA-021
+    name: Ambiguous table name reference
+    persona: dba
+    category: edge
+    description: The user refers to a table by an informal/incorrect name that doesn't exist, so the agent should ask for clarification rather than guessing.
+    prompt: How much space is the "orders history" table using?
+    requires_tables:
+      - DBA_TableSpaceUsage
+    expected_output:
+      expected_explanation_points:
+        - "There is no table literally named 'orders history' in TeraTestingDB."
+        - "The agent should ask whether the user means the Orders table, or offer the closest matching table names, rather than fabricating an answer."
+      expected_behavior: ask_clarifying_question
+
+  - id: DBA-022
+    name: Users with no granted access at all
+    persona: dba
+    category: edge
+    description: DBA wants to find provisioned users who have never been granted access to anything, which may indicate an incomplete onboarding or an account that should be removed.
+    prompt: Are there any users in DBA_Users who have no rows at all in the access rights table?
+    requires_tables:
+      - DBA_Users
+      - DBA_AccessRights
+    expected_output:
+      expected_sql: "SELECT u.UserName FROM DBA_Users u LEFT JOIN DBA_AccessRights ar ON u.UserName = ar.UserName WHERE ar.AccessID IS NULL;"
+      expected_result:
+        columns: ["UserName"]
+        row_count: 2
+        notes: "dbaadmin and secadmin have no rows in DBA_AccessRights (they likely operate with elevated/system-level privileges rather than explicit grants)."
+      expected_behavior: flag_data_quality_issue

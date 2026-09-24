@@ -1,0 +1,613 @@
+persona: data_scientist
+test_cases:
+
+  - id: DS-001
+    name: Customer-level feature table (orders, spend, avg order value)
+    persona: data_scientist
+    category: typical
+    description: >
+      Core feature-engineering pull: one row per customer with order count,
+      total spend, and average order value, joined to demographic
+      attributes. Must include customers with zero orders via LEFT JOIN.
+    prompt: >
+      Build me a customer-level feature table with order count, total
+      spend, average order value, segment, and region for every customer.
+    requires_tables: [Customer, Orders, OrderLine]
+    tags: [feature-engineering, rfm]
+    expected_output:
+      expected_behavior: return_data
+      expected_sql: |
+        SELECT
+            c.CustomerID,
+            c.Segment,
+            c.Region,
+            COUNT(DISTINCT o.OrderID) AS OrderCount,
+            COALESCE(SUM(ol.LineTotal), 0) AS TotalSpend,
+            COALESCE(SUM(ol.LineTotal) / NULLIF(COUNT(DISTINCT o.OrderID), 0), 0) AS AvgOrderValue
+        FROM Customer c
+        LEFT JOIN Orders o ON c.CustomerID = o.CustomerID
+        LEFT JOIN OrderLine ol ON o.OrderID = ol.OrderID
+        GROUP BY c.CustomerID, c.Segment, c.Region
+        ORDER BY c.CustomerID;
+      expected_result:
+        columns: [CustomerID, Segment, Region, OrderCount, TotalSpend, AvgOrderValue]
+        row_count: 15
+        notes: One row per customer, including CustomerID 115 with OrderCount 0 and TotalSpend 0.
+
+  - id: DS-002
+    name: RFM (recency, frequency, monetary) extract
+    persona: data_scientist
+    category: typical
+    description: Standard RFM feature extract per customer for a churn/CLV model.
+    prompt: >
+      I need recency, frequency, and monetary features per customer for a
+      churn model — days since last order, number of orders, and total
+      amount spent.
+    requires_tables: [Customer, Orders, OrderLine]
+    tags: [feature-engineering, rfm, churn]
+    expected_output:
+      expected_behavior: return_data
+      expected_sql: |
+        SELECT
+            c.CustomerID,
+            (CURRENT_DATE - MAX(o.OrderDate)) AS RecencyDays,
+            COUNT(DISTINCT o.OrderID) AS Frequency,
+            COALESCE(SUM(ol.LineTotal), 0) AS Monetary
+        FROM Customer c
+        LEFT JOIN Orders o ON c.CustomerID = o.CustomerID
+        LEFT JOIN OrderLine ol ON o.OrderID = ol.OrderID
+        GROUP BY c.CustomerID
+        ORDER BY c.CustomerID;
+      expected_result:
+        columns: [CustomerID, RecencyDays, Frequency, Monetary]
+        row_count: 15
+        notes: CustomerID 115 should show Frequency 0, Monetary 0, and a NULL RecencyDays (never ordered).
+
+  - id: DS-003
+    name: Signup cohort analysis
+    persona: data_scientist
+    category: typical
+    description: Cohort customers by signup month and compare their cumulative spend.
+    prompt: >
+      Group customers into cohorts by the month they signed up, and show
+      cohort size and total spend for each cohort.
+    requires_tables: [Customer, Orders, OrderLine]
+    tags: [cohort-analysis]
+    expected_output:
+      expected_behavior: return_data
+      expected_sql: |
+        SELECT
+            EXTRACT(YEAR FROM c.SignupDate) AS SignupYear,
+            EXTRACT(MONTH FROM c.SignupDate) AS SignupMonth,
+            COUNT(*) AS CustomerCount,
+            COALESCE(SUM(ol.LineTotal), 0) AS CohortTotalSpend
+        FROM Customer c
+        LEFT JOIN Orders o ON c.CustomerID = o.CustomerID
+        LEFT JOIN OrderLine ol ON o.OrderID = ol.OrderID
+        GROUP BY 1, 2
+        ORDER BY 1, 2;
+      expected_result:
+        columns: [SignupYear, SignupMonth, CustomerCount, CohortTotalSpend]
+        row_count_comparator: gte
+        row_count: 10
+        notes: One row per distinct signup year/month combination present in Customer.
+
+  - id: DS-004
+    name: Product co-purchase pairs
+    persona: data_scientist
+    category: typical
+    description: Association-rule-style feature — pairs of products bought in the same order.
+    prompt: >
+      Find pairs of products that are frequently purchased together in the
+      same order, so I can build a "customers also bought" feature.
+    requires_tables: [OrderLine]
+    tags: [feature-engineering, recommender]
+    expected_output:
+      expected_behavior: return_data
+      expected_sql: |
+        SELECT
+            ol1.ProductID AS ProductA,
+            ol2.ProductID AS ProductB,
+            COUNT(DISTINCT ol1.OrderID) AS TimesPairedTogether
+        FROM OrderLine ol1
+        JOIN OrderLine ol2
+          ON ol1.OrderID = ol2.OrderID
+         AND ol1.ProductID < ol2.ProductID
+        GROUP BY 1, 2
+        ORDER BY TimesPairedTogether DESC;
+      expected_result:
+        columns: [ProductA, ProductB, TimesPairedTogether]
+        row_count_comparator: gte
+        row_count: 1
+        notes: Self-join on OrderID with ProductID < ProductID avoids duplicate/reversed pairs and self-pairs.
+
+  - id: DS-005
+    name: Category-level aggregate features
+    persona: data_scientist
+    category: typical
+    description: Aggregate revenue, average price, and order count per product category.
+    prompt: >
+      Give me category-level features — total revenue, average unit price,
+      and order count per product category.
+    requires_tables: [Product, OrderLine]
+    tags: [feature-engineering]
+    expected_output:
+      expected_behavior: return_data
+      expected_sql: |
+        SELECT
+            COALESCE(p.Category, 'Unknown') AS Category,
+            SUM(ol.LineTotal) AS TotalRevenue,
+            AVG(p.UnitPrice) AS AvgUnitPrice,
+            COUNT(DISTINCT ol.OrderID) AS OrderCount
+        FROM Product p
+        JOIN OrderLine ol ON p.ProductID = ol.ProductID
+        GROUP BY 1
+        ORDER BY TotalRevenue DESC;
+      expected_result:
+        columns: [Category, TotalRevenue, AvgUnitPrice, OrderCount]
+        row_count_comparator: gte
+        row_count: 8
+        notes: Includes an 'Unknown' row for ProductID 210, which has a NULL Category.
+
+  - id: DS-006
+    name: Average order value by customer segment
+    persona: data_scientist
+    category: typical
+    description: Compare average order value across customer segments for a segmentation model.
+    prompt: >
+      What's the average order value broken down by customer segment
+      (Consumer, Corporate, Small Business)?
+    requires_tables: [Customer, Orders, OrderLine]
+    tags: [feature-engineering, segmentation]
+    expected_output:
+      expected_behavior: return_data
+      expected_sql: |
+        SELECT
+            c.Segment,
+            AVG(OrderTotal.OrderValue) AS AvgOrderValue
+        FROM Customer c
+        JOIN (
+            SELECT o.OrderID, o.CustomerID, SUM(ol.LineTotal) AS OrderValue
+            FROM Orders o
+            JOIN OrderLine ol ON o.OrderID = ol.OrderID
+            GROUP BY o.OrderID, o.CustomerID
+        ) OrderTotal ON c.CustomerID = OrderTotal.CustomerID
+        GROUP BY c.Segment
+        ORDER BY AvgOrderValue DESC;
+      expected_result:
+        columns: [Segment, AvgOrderValue]
+        row_count: 3
+        notes: One row per distinct Segment value (Consumer, Corporate, Small Business).
+
+  - id: DS-007
+    name: Store performance features
+    persona: data_scientist
+    category: typical
+    description: Per-store features for a model predicting store-level revenue.
+    prompt: >
+      I'm modeling store performance — pull order count, unique customer
+      count, and total revenue per store.
+    requires_tables: [Store, Orders, OrderLine]
+    tags: [feature-engineering]
+    expected_output:
+      expected_behavior: return_data
+      expected_sql: |
+        SELECT
+            s.StoreID,
+            s.StoreName,
+            COUNT(DISTINCT o.OrderID) AS OrderCount,
+            COUNT(DISTINCT o.CustomerID) AS UniqueCustomers,
+            COALESCE(SUM(ol.LineTotal), 0) AS TotalRevenue
+        FROM Store s
+        LEFT JOIN Orders o ON s.StoreID = o.StoreID
+        LEFT JOIN OrderLine ol ON o.OrderID = ol.OrderID
+        GROUP BY s.StoreID, s.StoreName
+        ORDER BY TotalRevenue DESC;
+      expected_result:
+        columns: [StoreID, StoreName, OrderCount, UniqueCustomers, TotalRevenue]
+        row_count: 5
+        notes: One row per store.
+
+  - id: DS-008
+    name: Monthly order volume time series
+    persona: data_scientist
+    category: typical
+    description: Time-series feature of order counts per calendar month, for trend/seasonality modeling.
+    prompt: >
+      Give me a monthly time series of order counts I can use as a
+      seasonality feature.
+    requires_tables: [Orders]
+    tags: [feature-engineering, time-series]
+    expected_output:
+      expected_behavior: return_data
+      expected_sql: |
+        SELECT
+            EXTRACT(YEAR FROM OrderDate) AS OrderYear,
+            EXTRACT(MONTH FROM OrderDate) AS OrderMonth,
+            COUNT(*) AS OrderCount
+        FROM Orders
+        GROUP BY 1, 2
+        ORDER BY 1, 2;
+      expected_result:
+        columns: [OrderYear, OrderMonth, OrderCount]
+        row_count_comparator: gte
+        row_count: 4
+        notes: Includes the isolated 2022-05 month from the historical OrderID 430.
+
+  - id: DS-009
+    name: Repeat purchase rate
+    persona: data_scientist
+    category: typical
+    description: Share of ordering customers who placed more than one order — a common churn/loyalty feature.
+    prompt: What percentage of customers who've ordered are repeat customers (more than one order)?
+    requires_tables: [Orders]
+    tags: [feature-engineering, churn]
+    expected_output:
+      expected_behavior: return_data
+      expected_sql: |
+        SELECT
+            CAST(SUM(CASE WHEN OrderCount > 1 THEN 1 ELSE 0 END) AS DECIMAL(10,4)) / COUNT(*) AS RepeatPurchaseRate
+        FROM (
+            SELECT CustomerID, COUNT(*) AS OrderCount
+            FROM Orders
+            GROUP BY CustomerID
+        ) CustomerOrders;
+      expected_result:
+        columns: [RepeatPurchaseRate]
+        row_count: 1
+        notes: Denominator is customers who placed at least one order (CustomerID 115 correctly excluded from this specific ratio).
+
+  - id: DS-010
+    name: Top 5 products by revenue
+    persona: data_scientist
+    category: typical
+    description: Popularity feature for a recommender system — top-selling products by revenue.
+    prompt: What are the top 5 products by total revenue? I want this as a popularity feature for a recommender.
+    requires_tables: [Product, OrderLine]
+    tags: [feature-engineering, recommender]
+    expected_output:
+      expected_behavior: return_data
+      expected_sql: |
+        SELECT
+            p.ProductID,
+            p.ProductName,
+            SUM(ol.LineTotal) AS TotalRevenue
+        FROM Product p
+        JOIN OrderLine ol ON p.ProductID = ol.ProductID
+        GROUP BY p.ProductID, p.ProductName
+        QUALIFY RANK() OVER (ORDER BY SUM(ol.LineTotal) DESC) <= 5
+        ORDER BY TotalRevenue DESC;
+      expected_result:
+        columns: [ProductID, ProductName, TotalRevenue]
+        row_count: 5
+        notes: Uses Teradata QUALIFY/RANK() instead of a LIMIT clause.
+
+  - id: DS-011
+    name: Region x segment customer counts
+    persona: data_scientist
+    category: typical
+    description: Cross-tabulation feature for designing a stratified train/test split.
+    prompt: >
+      Show me a breakdown of customer counts by region and segment so I can
+      design a stratified train/test split.
+    requires_tables: [Customer]
+    tags: [feature-engineering, sampling]
+    expected_output:
+      expected_behavior: return_data
+      expected_sql: |
+        SELECT
+            Region,
+            Segment,
+            COUNT(*) AS CustomerCount
+        FROM Customer
+        GROUP BY Region, Segment
+        ORDER BY Region, Segment;
+      expected_result:
+        columns: [Region, Segment, CustomerCount]
+        row_count_comparator: gte
+        row_count: 8
+        notes: Several Region/Segment combinations will have a count of 1.
+
+  - id: DS-012
+    name: Average basket size per customer
+    persona: data_scientist
+    category: typical
+    description: Average number of line items per order, per customer — a basket-size feature.
+    prompt: What's the average number of items per order for each customer?
+    requires_tables: [Orders, OrderLine]
+    tags: [feature-engineering]
+    expected_output:
+      expected_behavior: return_data
+      expected_sql: |
+        SELECT
+            o.CustomerID,
+            AVG(LineCounts.ItemCount) AS AvgBasketSize
+        FROM Orders o
+        JOIN (
+            SELECT OrderID, COUNT(*) AS ItemCount
+            FROM OrderLine
+            GROUP BY OrderID
+        ) LineCounts ON o.OrderID = LineCounts.OrderID
+        GROUP BY o.CustomerID
+        ORDER BY o.CustomerID;
+      expected_result:
+        columns: [CustomerID, AvgBasketSize]
+        row_count_comparator: gte
+        row_count: 10
+        notes: Only customers with at least one order appear (basket size is undefined otherwise).
+
+  - id: DS-013
+    name: Days between consecutive orders per customer
+    persona: data_scientist
+    category: typical
+    description: Inter-purchase-time feature using a window function, for customers with 2+ orders.
+    prompt: >
+      For customers with more than one order, compute the number of days
+      between each order and the one before it.
+    requires_tables: [Orders]
+    tags: [feature-engineering, window-function]
+    expected_output:
+      expected_behavior: return_data
+      expected_sql: |
+        SELECT
+            CustomerID,
+            OrderID,
+            OrderDate,
+            OrderDate - LAG(OrderDate) OVER (PARTITION BY CustomerID ORDER BY OrderDate) AS DaysSincePriorOrder
+        FROM Orders
+        QUALIFY DaysSincePriorOrder IS NOT NULL
+        ORDER BY CustomerID, OrderDate;
+      expected_result:
+        columns: [CustomerID, OrderID, OrderDate, DaysSincePriorOrder]
+        row_count_comparator: gte
+        row_count: 1
+        notes: Uses LAG() with QUALIFY to drop each customer's first order (no prior order to diff against).
+
+  - id: DS-014
+    name: Cancellation/return rate per customer
+    persona: data_scientist
+    category: typical
+    description: Feature capturing how often a customer's orders end up cancelled or returned.
+    prompt: For each customer, what fraction of their orders were cancelled or returned?
+    requires_tables: [Orders]
+    tags: [feature-engineering]
+    expected_output:
+      expected_behavior: return_data
+      expected_sql: |
+        SELECT
+            CustomerID,
+            COUNT(*) AS TotalOrders,
+            SUM(CASE WHEN Status IN ('Cancelled', 'Returned') THEN 1 ELSE 0 END) AS CancelledOrReturned,
+            CAST(SUM(CASE WHEN Status IN ('Cancelled', 'Returned') THEN 1 ELSE 0 END) AS DECIMAL(10,4)) / COUNT(*) AS CancelReturnRate
+        FROM Orders
+        GROUP BY CustomerID
+        ORDER BY CancelReturnRate DESC;
+      expected_result:
+        columns: [CustomerID, TotalOrders, CancelledOrReturned, CancelReturnRate]
+        row_count_comparator: gte
+        row_count: 10
+        notes: Only customers with at least one order appear.
+
+  - id: DS-015
+    name: Train/holdout date-range extract
+    persona: data_scientist
+    category: typical
+    description: Time-based train/test split extract for model validation.
+    prompt: >
+      Pull all orders from January and February 2025 as my training set —
+      I'll hold out March 2025 for validation.
+    requires_tables: [Orders]
+    tags: [feature-engineering, time-series]
+    expected_output:
+      expected_behavior: return_data
+      expected_sql: |
+        SELECT *
+        FROM Orders
+        WHERE OrderDate BETWEEN DATE '2025-01-01' AND DATE '2025-02-28';
+      expected_result:
+        columns: [OrderID, CustomerID, StoreID, OrderDate, Status]
+        row_count_comparator: gte
+        row_count: 10
+        notes: Excludes March 2025 orders and the isolated 2022-05-04 historical order.
+      expected_explanation_points:
+        - The holdout set (March 2025) should be pulled separately with OrderDate >= DATE '2025-03-01' to avoid any date overlap/leakage with the training window.
+
+  - id: DS-016
+    name: Price-tier bucketing feature
+    persona: data_scientist
+    category: typical
+    description: Discretize UnitPrice into Low/Medium/High tiers as a categorical feature.
+    prompt: Bucket each product into a Low/Medium/High price tier based on unit price.
+    requires_tables: [Product]
+    tags: [feature-engineering]
+    expected_output:
+      expected_behavior: return_data
+      expected_sql: |
+        SELECT
+            ProductID,
+            ProductName,
+            UnitPrice,
+            CASE
+                WHEN UnitPrice < 15 THEN 'Low'
+                WHEN UnitPrice < 60 THEN 'Medium'
+                ELSE 'High'
+            END AS PriceTier
+        FROM Product
+        ORDER BY UnitPrice;
+      expected_result:
+        columns: [ProductID, ProductName, UnitPrice, PriceTier]
+        row_count: 15
+        notes: One row per product; thresholds are illustrative and should be stated explicitly by the agent.
+
+  - id: DS-017
+    name: "EDGE: zero-order customer must not be dropped from feature table"
+    persona: data_scientist
+    category: edge
+    description: >
+      Explicitly probes whether the agent uses LEFT JOIN semantics so that
+      CustomerID 115 (Olivia Chen), who has never placed an order, still
+      appears in the output with zero-valued features instead of being
+      silently dropped by an inner join.
+    prompt: >
+      Build the customer feature table again, but make sure customers who
+      have never placed an order — like Olivia Chen — are still included
+      with zero values, not dropped.
+    requires_tables: [Customer, Orders, OrderLine]
+    tags: [feature-engineering, edge-case, null-handling]
+    expected_output:
+      expected_behavior: return_data
+      expected_sql: |
+        SELECT
+            c.CustomerID,
+            c.CustomerName,
+            COUNT(DISTINCT o.OrderID) AS OrderCount,
+            COALESCE(SUM(ol.LineTotal), 0) AS TotalSpend
+        FROM Customer c
+        LEFT JOIN Orders o ON c.CustomerID = o.CustomerID
+        LEFT JOIN OrderLine ol ON o.OrderID = ol.OrderID
+        GROUP BY c.CustomerID, c.CustomerName
+        ORDER BY c.CustomerID;
+      expected_result:
+        columns: [CustomerID, CustomerName, OrderCount, TotalSpend]
+        row_count: 15
+        notes: CustomerID 115 (Olivia Chen) must appear with OrderCount 0 and TotalSpend 0; an INNER JOIN that drops her would be incorrect.
+
+  - id: DS-018
+    name: "EDGE: NULL product Category bucketing"
+    persona: data_scientist
+    category: edge
+    description: >
+      ProductID 210 has a NULL Category. Checks that the agent explicitly
+      buckets NULL categories (e.g. as 'Unknown') rather than silently
+      excluding the product or erroring on the GROUP BY.
+    prompt: >
+      Build the category revenue feature again, but tell me specifically
+      how you're handling the fastener kit product that has no category
+      assigned.
+    requires_tables: [Product, OrderLine]
+    tags: [feature-engineering, edge-case, null-handling]
+    expected_output:
+      expected_behavior: return_data
+      expected_sql: |
+        SELECT
+            COALESCE(p.Category, 'Unknown') AS CategoryBucket,
+            COUNT(*) AS ProductCount,
+            SUM(ol.LineTotal) AS Revenue
+        FROM Product p
+        LEFT JOIN OrderLine ol ON p.ProductID = ol.ProductID
+        GROUP BY 1
+        ORDER BY Revenue DESC;
+      expected_result:
+        columns: [CategoryBucket, ProductCount, Revenue]
+        row_count_comparator: gte
+        row_count: 8
+        notes: ProductID 210 (Miscellaneous Fastener Kit) must appear under an explicit 'Unknown' bucket rather than being dropped by the GROUP BY.
+      expected_explanation_points:
+        - The agent should explicitly call out that ProductID 210 has a NULL Category and state how it was bucketed.
+
+  - id: DS-019
+    name: "EDGE: discontinued product must be excluded from a recent-activity window"
+    persona: data_scientist
+    category: edge
+    description: >
+      ProductID 215 is discontinued and its only order line is from
+      2022-05-04, far outside any "recent" (trailing 12 months) window.
+      A correct recency-window feature must exclude it; including it is a bug.
+    prompt: >
+      Compute recent revenue per product over the trailing 12 months — I
+      want to know if the discontinued radio is still showing up in recent
+      sales.
+    requires_tables: [OrderLine, Orders, Product]
+    tags: [feature-engineering, edge-case, time-window]
+    expected_output:
+      expected_behavior: return_data
+      expected_sql: |
+        SELECT
+            ol.ProductID,
+            p.ProductName,
+            p.Discontinued,
+            SUM(ol.LineTotal) AS RecentRevenue
+        FROM OrderLine ol
+        JOIN Orders o ON ol.OrderID = o.OrderID
+        JOIN Product p ON ol.ProductID = p.ProductID
+        WHERE o.OrderDate >= CURRENT_DATE - 365
+        GROUP BY ol.ProductID, p.ProductName, p.Discontinued
+        ORDER BY RecentRevenue DESC;
+      expected_result:
+        columns: [ProductID, ProductName, Discontinued, RecentRevenue]
+        notes: ProductID 215 (Analog Shop Radio) must NOT appear — its only sale (OrderID 430) was on 2022-05-04, outside the trailing-365-day window. Its appearance indicates a date-filtering bug.
+      expected_explanation_points:
+        - The agent should confirm the discontinued radio has no sales in the trailing-12-month window.
+
+  - id: DS-020
+    name: "EDGE: standard deviation on a single-row segment/region slice"
+    persona: data_scientist
+    category: edge
+    description: >
+      Only one customer (CustomerID 112, Lonestar Auto Parts) matches
+      Segment='Small Business' AND Region='Midwest'. Sample standard
+      deviation is mathematically undefined for n=1; the agent should flag
+      this rather than silently returning a misleading number.
+    prompt: What's the standard deviation of order value for Small Business customers in the Midwest?
+    requires_tables: [Customer, Orders, OrderLine]
+    tags: [statistics, edge-case, small-sample]
+    expected_output:
+      expected_behavior: flag_data_quality_issue
+      expected_sql: |
+        SELECT
+            COUNT(*) AS SampleSize,
+            STDDEV_SAMP(OrderTotal.OrderValue) AS StdDevOrderValue
+        FROM Customer c
+        JOIN Orders o ON c.CustomerID = o.CustomerID
+        JOIN (
+            SELECT OrderID, SUM(LineTotal) AS OrderValue
+            FROM OrderLine
+            GROUP BY OrderID
+        ) OrderTotal ON o.OrderID = OrderTotal.OrderID
+        WHERE c.Segment = 'Small Business' AND c.Region = 'Midwest';
+      expected_result:
+        columns: [SampleSize, StdDevOrderValue]
+        row_count: 1
+        notes: SampleSize will be small (this segment/region slice matches only one customer's order(s)); STDDEV_SAMP returns NULL when fewer than 2 rows are present.
+      expected_explanation_points:
+        - The agent should explicitly warn that the sample size is too small for a meaningful standard deviation, rather than reporting NULL or a single value without context.
+
+  - id: DS-021
+    name: "EDGE: request for data not present in the schema (clickstream)"
+    persona: data_scientist
+    category: edge
+    description: >
+      No web/clickstream/browsing-history table exists in this schema.
+      The agent must not hallucinate a query against a nonexistent table;
+      it should explain the limitation and offer available alternatives.
+    prompt: >
+      Pull each customer's website clickstream and browsing history so I
+      can build a churn model.
+    requires_tables: [Customer, Orders, OrderLine]
+    tags: [edge-case, unsupported-request]
+    expected_output:
+      expected_behavior: explain_only
+      expected_explanation_points:
+        - No clickstream, page-view, or browsing-history table exists in this schema (only Customer, Product, Store, Orders, OrderLine, Employee, and the DBA_* tables).
+        - The agent should not fabricate a query against a nonexistent table.
+        - The agent should offer available proxies for churn modeling instead, e.g. recency/frequency/monetary features from Orders and OrderLine.
+
+  - id: DS-022
+    name: "EDGE: request for marketing engagement metrics not present in the schema"
+    persona: data_scientist
+    category: edge
+    description: >
+      No email/marketing engagement table exists in this schema. The Email
+      column on Customer only stores an address, not engagement metrics.
+      The agent should clarify this rather than inventing values.
+    prompt: >
+      Give me each customer's email open rate and click-through rate from
+      our last marketing campaign.
+    requires_tables: [Customer]
+    tags: [edge-case, unsupported-request]
+    expected_output:
+      expected_behavior: explain_only
+      expected_explanation_points:
+        - Customer only stores an Email address column; there is no campaign, email-event, or engagement-metrics table in this schema.
+        - The agent should not invent open-rate/click-through-rate values.
+        - The agent should suggest that engagement data would need to be sourced from a marketing platform export before this feature can be built.

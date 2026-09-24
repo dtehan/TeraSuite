@@ -1,0 +1,137 @@
+openapi: 3.0.3
+info:
+  title: Teradata Tera Agent Regression Eval Schema
+  description: >
+    Defines the shape of a single regression test case for the Teradata
+    "Tera" conversational agent, and the persona-level suite that groups
+    them. Actual test cases live as YAML documents in evals/cases/*.yaml,
+    each conforming to the TestSuite schema below. This file is a schema
+    definition only -- it declares no paths/endpoints because the eval
+    cases are consumed by an offline test harness (scripts/validate_evals.py),
+    not served as a live API.
+  version: 1.0.0
+paths: {}
+components:
+  schemas:
+    Persona:
+      type: string
+      enum:
+        - business_user
+        - data_scientist
+        - data_analyst
+        - dba
+        - security_expert
+        - database_operations
+
+    Category:
+      type: string
+      enum:
+        - typical
+        - edge
+
+    ExpectedOutput:
+      type: object
+      description: >
+        What a correct agent response should contain. At least one of
+        expected_sql, expected_result, or expected_explanation_points
+        must be present.
+      properties:
+        expected_sql:
+          type: string
+          description: >
+            A reference Teradata SQL query that would correctly answer the
+            prompt. The agent's generated SQL does not need to match this
+            verbatim, but should be semantically equivalent.
+        expected_result:
+          type: object
+          description: The shape/content the query result should have.
+          properties:
+            columns:
+              type: array
+              items:
+                type: string
+            row_count:
+              type: integer
+              minimum: 0
+            row_count_comparator:
+              type: string
+              enum: [eq, gte, lte, gt, lt]
+              default: eq
+            notes:
+              type: string
+              description: Free-text description of expected values (e.g. "all rows have Region = 'West'").
+        expected_explanation_points:
+          type: array
+          description: >
+            Key facts/points a correct natural-language answer or
+            explanation must include (used for non-SQL or admin/advisory
+            prompts).
+          items:
+            type: string
+        expected_behavior:
+          type: string
+          enum:
+            - return_data
+            - return_empty_result
+            - ask_clarifying_question
+            - refuse_or_flag_permission
+            - explain_only
+            - flag_data_quality_issue
+          description: The high-level behavior the agent is expected to exhibit for this case.
+      minProperties: 1
+
+    TestCase:
+      type: object
+      required:
+        - id
+        - name
+        - persona
+        - category
+        - description
+        - prompt
+        - requires_tables
+        - expected_output
+      properties:
+        id:
+          type: string
+          pattern: '^[A-Z]{2,4}-[0-9]{3}$'
+          description: "Stable unique id, e.g. BU-001, DS-014, SEC-007."
+        name:
+          type: string
+          description: Short human-readable title for the test case.
+        persona:
+          $ref: '#/components/schemas/Persona'
+        category:
+          $ref: '#/components/schemas/Category'
+        description:
+          type: string
+          description: What this test case is checking and why it matters.
+        prompt:
+          type: string
+          description: The natural-language prompt a user of this persona would type to the agent.
+        requires_tables:
+          type: array
+          description: Tables (from db/01_create_database.sql) this prompt should cause the agent to query.
+          items:
+            type: string
+          minItems: 1
+        tags:
+          type: array
+          items:
+            type: string
+        expected_output:
+          $ref: '#/components/schemas/ExpectedOutput'
+
+    TestSuite:
+      type: object
+      required:
+        - persona
+        - test_cases
+      properties:
+        persona:
+          $ref: '#/components/schemas/Persona'
+        test_cases:
+          type: array
+          items:
+            $ref: '#/components/schemas/TestCase'
+          minItems: 1

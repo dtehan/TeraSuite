@@ -1,0 +1,468 @@
+persona: data_analyst
+test_cases:
+  - id: DA-001
+    name: Monthly order volume trend
+    persona: data_analyst
+    category: typical
+    description: Analyst wants a month-over-month trend of order volume to spot seasonality.
+    prompt: "Show me the number of orders placed per month across all of 2025."
+    requires_tables: [Orders]
+    expected_output:
+      expected_sql: >
+        SELECT EXTRACT(YEAR FROM OrderDate) AS OrderYear,
+               EXTRACT(MONTH FROM OrderDate) AS OrderMonth,
+               COUNT(*) AS OrderCount
+        FROM Orders
+        WHERE OrderDate BETWEEN DATE '2025-01-01' AND DATE '2025-12-31'
+        GROUP BY 1, 2
+        ORDER BY 1, 2;
+      expected_result:
+        columns: [OrderYear, OrderMonth, OrderCount]
+        row_count_comparator: gte
+        row_count: 3
+        notes: "One row per month with at least one order in 2025 (Jan, Feb, Mar are populated); OrderID 430 (2022-05-04) must be excluded."
+      expected_behavior: return_data
+
+  - id: DA-002
+    name: Top 5 products by revenue
+    persona: data_analyst
+    category: typical
+    description: Standard top-N ranking report for merchandising review.
+    prompt: "What are the top 5 products by total revenue?"
+    requires_tables: [Product, OrderLine]
+    expected_output:
+      expected_sql: >
+        SELECT p.ProductName, SUM(ol.LineTotal) AS TotalRevenue
+        FROM Product p
+        JOIN OrderLine ol ON p.ProductID = ol.ProductID
+        GROUP BY p.ProductName
+        QUALIFY RANK() OVER (ORDER BY SUM(ol.LineTotal) DESC) <= 5
+        ORDER BY TotalRevenue DESC;
+      expected_result:
+        columns: [ProductName, TotalRevenue]
+        row_count: 5
+        notes: "Ranked descending by total revenue; ties handled by RANK() may return more than 5 rows."
+      expected_behavior: return_data
+
+  - id: DA-003
+    name: Top products by quantity per store
+    persona: data_analyst
+    category: typical
+    description: Per-store best sellers for regional merchandising decisions.
+    prompt: "For each store, what is the best-selling product by quantity sold?"
+    requires_tables: [Store, Orders, OrderLine, Product]
+    expected_output:
+      expected_sql: >
+        SELECT s.StoreName, p.ProductName, SUM(ol.Quantity) AS TotalQty
+        FROM Store s
+        JOIN Orders o ON s.StoreID = o.StoreID
+        JOIN OrderLine ol ON o.OrderID = ol.OrderID
+        JOIN Product p ON ol.ProductID = p.ProductID
+        GROUP BY s.StoreName, p.ProductName
+        QUALIFY RANK() OVER (PARTITION BY s.StoreName ORDER BY SUM(ol.Quantity) DESC) = 1
+        ORDER BY s.StoreName;
+      expected_result:
+        columns: [StoreName, ProductName, TotalQty]
+        row_count_comparator: gte
+        row_count: 5
+        notes: "One winning product per store (5 stores); ties may produce more than one row for a store."
+      expected_behavior: return_data
+
+  - id: DA-004
+    name: Order status distribution
+    persona: data_analyst
+    category: typical
+    description: Breakdown of order counts by status for a health-of-pipeline view.
+    prompt: "Break down all orders by their status."
+    requires_tables: [Orders]
+    expected_output:
+      expected_sql: >
+        SELECT Status, COUNT(*) AS OrderCount
+        FROM Orders
+        GROUP BY Status
+        ORDER BY OrderCount DESC;
+      expected_result:
+        columns: [Status, OrderCount]
+        row_count: 4
+        notes: "Expect exactly 4 distinct statuses: Completed, Cancelled, Pending, Returned."
+      expected_behavior: return_data
+
+  - id: DA-005
+    name: Average line-item value by product category
+    persona: data_analyst
+    category: typical
+    description: Category-level average basket contribution.
+    prompt: "What's the average line-item value for each product category?"
+    requires_tables: [Product, OrderLine]
+    expected_output:
+      expected_sql: >
+        SELECT p.Category, AVG(ol.LineTotal) AS AvgLineTotal
+        FROM Product p
+        JOIN OrderLine ol ON p.ProductID = ol.ProductID
+        GROUP BY p.Category
+        ORDER BY AvgLineTotal DESC;
+      expected_result:
+        columns: [Category, AvgLineTotal]
+        row_count_comparator: gte
+        row_count: 8
+        notes: "Includes a NULL Category row for ProductID 210 (Miscellaneous Fastener Kit) grouped on its own."
+      expected_behavior: return_data
+
+  - id: DA-006
+    name: Employee headcount by department
+    persona: data_analyst
+    category: typical
+    description: HR-style headcount rollup for a staffing report.
+    prompt: "How many employees are in each department?"
+    requires_tables: [Employee]
+    expected_output:
+      expected_sql: >
+        SELECT Department, COUNT(*) AS Headcount
+        FROM Employee
+        GROUP BY Department
+        ORDER BY Headcount DESC;
+      expected_result:
+        columns: [Department, Headcount]
+        row_count: 5
+        notes: "Departments: Retail, Fulfillment, Finance, IT, Executive."
+      expected_behavior: return_data
+
+  - id: DA-007
+    name: Manager-to-report rollup
+    persona: data_analyst
+    category: typical
+    description: Org-chart style rollup showing each manager with their direct reports.
+    prompt: "List every employee along with the name of their manager."
+    requires_tables: [Employee]
+    expected_output:
+      expected_sql: >
+        SELECT e.EmployeeName, m.EmployeeName AS ManagerName
+        FROM Employee e
+        LEFT JOIN Employee m ON e.ManagerID = m.EmployeeID
+        ORDER BY ManagerName, e.EmployeeName;
+      expected_result:
+        columns: [EmployeeName, ManagerName]
+        row_count: 15
+        notes: "Renee Castillo (EmployeeID 601) must appear with ManagerName = NULL, not be dropped by the self-join."
+      expected_behavior: return_data
+
+  - id: DA-008
+    name: Store performance ranking by revenue
+    persona: data_analyst
+    category: typical
+    description: Ranks stores for a leadership performance review.
+    prompt: "Rank all stores from highest to lowest total revenue."
+    requires_tables: [Store, Orders, OrderLine]
+    expected_output:
+      expected_sql: >
+        SELECT s.StoreName, SUM(ol.LineTotal) AS TotalRevenue,
+               RANK() OVER (ORDER BY SUM(ol.LineTotal) DESC) AS RevenueRank
+        FROM Store s
+        JOIN Orders o ON s.StoreID = o.StoreID
+        JOIN OrderLine ol ON o.OrderID = ol.OrderID
+        GROUP BY s.StoreName
+        ORDER BY RevenueRank;
+      expected_result:
+        columns: [StoreName, TotalRevenue, RevenueRank]
+        row_count: 5
+        notes: "All 5 stores ranked; Store 305 (Online Fulfillment Center, Region NULL) must still appear since it has orders."
+      expected_behavior: return_data
+
+  - id: DA-009
+    name: Percent of total revenue by region
+    persona: data_analyst
+    category: typical
+    description: Contribution analysis for regional performance review.
+    prompt: "What percentage of total revenue does each customer region contribute?"
+    requires_tables: [Customer, Orders, OrderLine]
+    expected_output:
+      expected_sql: >
+        SELECT c.Region,
+               SUM(ol.LineTotal) AS RegionRevenue,
+               100.0 * SUM(ol.LineTotal) / SUM(SUM(ol.LineTotal)) OVER () AS PctOfTotal
+        FROM Customer c
+        JOIN Orders o ON c.CustomerID = o.CustomerID
+        JOIN OrderLine ol ON o.OrderID = ol.OrderID
+        GROUP BY c.Region
+        ORDER BY PctOfTotal DESC;
+      expected_result:
+        columns: [Region, RegionRevenue, PctOfTotal]
+        row_count: 4
+        notes: "Percentages across all rows should sum to ~100."
+      expected_behavior: return_data
+
+  - id: DA-010
+    name: Completed sales only report
+    persona: data_analyst
+    category: typical
+    description: >
+      Tests that the agent correctly restricts a "sales" report to completed
+      orders and does not silently include cancelled/pending/returned orders.
+    prompt: "What is our total completed sales revenue this year?"
+    requires_tables: [Orders, OrderLine]
+    expected_output:
+      expected_sql: >
+        SELECT SUM(ol.LineTotal) AS CompletedRevenue
+        FROM Orders o
+        JOIN OrderLine ol ON o.OrderID = ol.OrderID
+        WHERE o.Status = 'Completed'
+          AND EXTRACT(YEAR FROM o.OrderDate) = 2025;
+      expected_result:
+        columns: [CompletedRevenue]
+        row_count: 1
+        notes: "Must exclude Cancelled, Pending, and Returned orders (OrderIDs 404, 407, 410, 419, 422, 425) from the total."
+      expected_behavior: return_data
+
+  - id: DA-011
+    name: Quarterly revenue comparison
+    persona: data_analyst
+    category: typical
+    description: Period-over-period comparison for a QBR deck.
+    prompt: "Compare total revenue between Q1 2025 and Q1 2024."
+    requires_tables: [Orders, OrderLine]
+    expected_output:
+      expected_sql: >
+        SELECT EXTRACT(YEAR FROM o.OrderDate) AS OrderYear,
+               SUM(ol.LineTotal) AS TotalRevenue
+        FROM Orders o
+        JOIN OrderLine ol ON o.OrderID = ol.OrderID
+        WHERE o.OrderDate BETWEEN DATE '2024-01-01' AND DATE '2024-03-31'
+           OR o.OrderDate BETWEEN DATE '2025-01-01' AND DATE '2025-03-31'
+        GROUP BY 1
+        ORDER BY 1;
+      expected_result:
+        columns: [OrderYear, TotalRevenue]
+        row_count: 1
+        notes: "No orders exist in Q1 2024, so only the 2025 row should be returned; the agent should note the lack of 2024 data rather than fabricate a value."
+      expected_behavior: return_data
+
+  - id: DA-012
+    name: Customers with no orders
+    persona: data_analyst
+    category: typical
+    description: Data-quality / churn-risk style check for inactive customers.
+    prompt: "Which customers have never placed an order?"
+    requires_tables: [Customer, Orders]
+    expected_output:
+      expected_sql: >
+        SELECT c.CustomerID, c.CustomerName
+        FROM Customer c
+        LEFT JOIN Orders o ON c.CustomerID = o.CustomerID
+        WHERE o.OrderID IS NULL;
+      expected_result:
+        columns: [CustomerID, CustomerName]
+        row_count: 1
+        notes: "Only CustomerID 115 (Olivia Chen) should be returned."
+      expected_behavior: return_data
+
+  - id: DA-013
+    name: Average order value by customer segment
+    persona: data_analyst
+    category: typical
+    description: Segment-level average order value for a customer-value analysis.
+    prompt: "What is the average order value for each customer segment?"
+    requires_tables: [Customer, Orders, OrderLine]
+    expected_output:
+      expected_sql: >
+        SELECT c.Segment, AVG(OrderTotal) AS AvgOrderValue
+        FROM Customer c
+        JOIN Orders o ON c.CustomerID = o.CustomerID
+        JOIN (SELECT OrderID, SUM(LineTotal) AS OrderTotal FROM OrderLine GROUP BY OrderID) ot ON o.OrderID = ot.OrderID
+        GROUP BY c.Segment
+        ORDER BY AvgOrderValue DESC;
+      expected_result:
+        columns: [Segment, AvgOrderValue]
+        row_count: 3
+        notes: "Segments: Corporate, Consumer, Small Business."
+      expected_behavior: return_data
+
+  - id: DA-014
+    name: Orders per store per month
+    persona: data_analyst
+    category: typical
+    description: Pivot-style report combining time and store dimensions.
+    prompt: "Show me a breakdown of order counts by store and month."
+    requires_tables: [Store, Orders]
+    expected_output:
+      expected_sql: >
+        SELECT s.StoreName, EXTRACT(MONTH FROM o.OrderDate) AS OrderMonth, COUNT(*) AS OrderCount
+        FROM Store s
+        JOIN Orders o ON s.StoreID = o.StoreID
+        GROUP BY s.StoreName, OrderMonth
+        ORDER BY s.StoreName, OrderMonth;
+      expected_result:
+        columns: [StoreName, OrderMonth, OrderCount]
+        row_count_comparator: gte
+        row_count: 5
+        notes: "Store/month combinations only appear where at least one order exists (no zero-filled rows expected unless agent explicitly generates a calendar spine)."
+      expected_behavior: return_data
+
+  - id: DA-015
+    name: Revenue contribution of top 3 customers
+    persona: data_analyst
+    category: typical
+    description: Concentration-risk analysis (Pareto-style) for account management.
+    prompt: "What share of total revenue comes from our top 3 customers by spend?"
+    requires_tables: [Customer, Orders, OrderLine]
+    expected_output:
+      expected_sql: >
+        SELECT c.CustomerName, SUM(ol.LineTotal) AS CustomerRevenue
+        FROM Customer c
+        JOIN Orders o ON c.CustomerID = o.CustomerID
+        JOIN OrderLine ol ON o.OrderID = ol.OrderID
+        GROUP BY c.CustomerName
+        QUALIFY RANK() OVER (ORDER BY SUM(ol.LineTotal) DESC) <= 3
+        ORDER BY CustomerRevenue DESC;
+      expected_result:
+        columns: [CustomerName, CustomerRevenue]
+        row_count: 3
+        notes: "Top 3 spenders by total LineTotal."
+      expected_behavior: return_data
+
+  - id: DA-016
+    name: Average items per order
+    persona: data_analyst
+    category: typical
+    description: Basket-size metric for merchandising.
+    prompt: "On average, how many line items are in each order?"
+    requires_tables: [Orders, OrderLine]
+    expected_output:
+      expected_sql: >
+        SELECT AVG(LineCount) AS AvgLineItemsPerOrder
+        FROM (SELECT OrderID, COUNT(*) AS LineCount FROM OrderLine GROUP BY OrderID) t;
+      expected_result:
+        columns: [AvgLineItemsPerOrder]
+        row_count: 1
+        notes: "Should be roughly 1.5 given 45 order lines across 30 orders (some orders have zero lines, e.g. none currently, but agent should use LEFT JOIN/AVG over Orders if it wants to include zero-line orders explicitly)."
+      expected_behavior: return_data
+
+  - id: DA-017
+    name: Trend report excluding a stale historical order
+    persona: data_analyst
+    category: edge
+    description: >
+      Tests correct date-window filtering: OrderID 430 (2022-05-04) is far
+      outside a "last 90 days" or "this year" window and referencing a
+      discontinued product; a naive unfiltered query would wrongly include it.
+    prompt: "Show total revenue for the last 90 days."
+    requires_tables: [Orders, OrderLine]
+    expected_output:
+      expected_sql: >
+        SELECT SUM(ol.LineTotal) AS Last90DaysRevenue
+        FROM Orders o
+        JOIN OrderLine ol ON o.OrderID = ol.OrderID
+        WHERE o.OrderDate >= CURRENT_DATE - 90;
+      expected_result:
+        columns: [Last90DaysRevenue]
+        row_count: 1
+        notes: "OrderID 430 (dated 2022-05-04) must be excluded from this total regardless of when the query is run."
+      expected_behavior: return_data
+
+  - id: DA-018
+    name: Region breakdown with a NULL region store
+    persona: data_analyst
+    category: edge
+    description: >
+      Store 305 (Online Fulfillment Center) has Region = NULL. A region
+      breakdown must surface this as an explicit NULL/Unknown bucket rather
+      than silently dropping those orders.
+    prompt: "Break down total order count by store region."
+    requires_tables: [Store, Orders]
+    expected_output:
+      expected_sql: >
+        SELECT s.Region, COUNT(*) AS OrderCount
+        FROM Store s
+        JOIN Orders o ON s.StoreID = o.StoreID
+        GROUP BY s.Region
+        ORDER BY OrderCount DESC;
+      expected_result:
+        columns: [Region, OrderCount]
+        row_count: 5
+        notes: "One row must have Region = NULL, representing Store 305's orders; that row must not be omitted from the result set."
+      expected_behavior: return_data
+
+  - id: DA-019
+    name: Category breakdown with a NULL category product
+    persona: data_analyst
+    category: edge
+    description: >
+      ProductID 210 (Miscellaneous Fastener Kit) has Category = NULL. A
+      category-level revenue pivot must surface it distinctly, not drop it
+      or silently merge it into another bucket.
+    prompt: "What's the revenue breakdown by product category?"
+    requires_tables: [Product, OrderLine]
+    expected_output:
+      expected_sql: >
+        SELECT p.Category, SUM(ol.LineTotal) AS CategoryRevenue
+        FROM Product p
+        JOIN OrderLine ol ON p.ProductID = ol.ProductID
+        GROUP BY p.Category
+        ORDER BY CategoryRevenue DESC;
+      expected_result:
+        columns: [Category, CategoryRevenue]
+        row_count_comparator: gte
+        row_count: 8
+        notes: "One row must have Category = NULL corresponding to ProductID 210's sales."
+      expected_behavior: return_data
+
+  - id: DA-020
+    name: Ambiguous "sales" request without status clarification
+    persona: data_analyst
+    category: edge
+    description: >
+      The word "sales" is ambiguous with respect to order status (does it
+      mean all orders, or only Completed ones?). The agent should either ask
+      a clarifying question or explicitly state the assumption it made
+      (e.g. Completed-only) rather than silently including Cancelled/Returned
+      orders as if they were revenue.
+    prompt: "What were our total sales last quarter?"
+    requires_tables: [Orders, OrderLine]
+    expected_output:
+      expected_explanation_points:
+        - "The agent should clarify or explicitly state whether 'sales' includes only Completed orders or all orders regardless of status."
+        - "If it proceeds without asking, it must state the assumption (e.g. 'assuming completed orders only') in its answer."
+      expected_behavior: ask_clarifying_question
+
+  - id: DA-021
+    name: Org rollup must not drop the top-level executive
+    persona: data_analyst
+    category: edge
+    description: >
+      EmployeeID 601 (Renee Castillo) has ManagerID = NULL as the top of the
+      hierarchy. A management-chain report using an INNER JOIN self-join
+      would incorrectly drop her row entirely.
+    prompt: "Show me the full list of employees with their manager's name, including the top of the org chart."
+    requires_tables: [Employee]
+    expected_output:
+      expected_sql: >
+        SELECT e.EmployeeName, m.EmployeeName AS ManagerName
+        FROM Employee e
+        LEFT JOIN Employee m ON e.ManagerID = m.EmployeeID
+        ORDER BY e.EmployeeName;
+      expected_result:
+        columns: [EmployeeName, ManagerName]
+        row_count: 15
+        notes: "Renee Castillo must be present with ManagerName = NULL, not excluded by an inner join."
+      expected_behavior: return_data
+
+  - id: DA-022
+    name: Revenue trend for a period with no data
+    persona: data_analyst
+    category: edge
+    description: >
+      Tests that the agent correctly returns/reports an empty result rather
+      than fabricating numbers when asked about a period with zero orders
+      (e.g. Q3 2025, which has no seeded data).
+    prompt: "What was our total revenue in Q3 2025?"
+    requires_tables: [Orders, OrderLine]
+    expected_output:
+      expected_sql: >
+        SELECT SUM(ol.LineTotal) AS Q3Revenue
+        FROM Orders o
+        JOIN OrderLine ol ON o.OrderID = ol.OrderID
+        WHERE o.OrderDate BETWEEN DATE '2025-07-01' AND DATE '2025-09-30';
+      expected_result:
+        columns: [Q3Revenue]
+        row_count: 1
+        notes: "SUM over zero matching rows returns NULL; the agent should report this as 'no orders/revenue found for Q3 2025' rather than stating $0 or fabricating a figure."
+      expected_behavior: return_empty_result
