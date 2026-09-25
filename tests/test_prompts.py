@@ -10,23 +10,27 @@ import pytest
 from agent.client import build_http_client, build_mcp_headers, build_system_prompt, build_user_prompt
 
 
-def test_bearer_header_adds_prefix(monkeypatch):
+def test_api_key_header_adds_prefix(monkeypatch):
     monkeypatch.setenv("TERA_BEARER_TOKEN", "secret-token")
+    monkeypatch.delenv("TERA_AUTH_SCHEME", raising=False)
     monkeypatch.delenv("TERA_MCP_EXTRA_HEADERS", raising=False)
-    assert build_mcp_headers()["Authorization"] == "Bearer secret-token"
+    assert build_mcp_headers()["Authorization"] == "ApiKey secret-token"
 
 
-def test_bearer_header_keeps_existing_prefix(monkeypatch):
+def test_auth_header_keeps_existing_scheme(monkeypatch):
+    monkeypatch.delenv("TERA_MCP_EXTRA_HEADERS", raising=False)
+    monkeypatch.setenv("TERA_BEARER_TOKEN", "ApiKey already")
+    assert build_mcp_headers()["Authorization"] == "ApiKey already"
     monkeypatch.setenv("TERA_BEARER_TOKEN", "Bearer already")
-    monkeypatch.delenv("TERA_MCP_EXTRA_HEADERS", raising=False)
     assert build_mcp_headers()["Authorization"] == "Bearer already"
 
 
-def test_extra_headers_do_not_replace_bearer(monkeypatch):
+def test_extra_headers_do_not_replace_authorization(monkeypatch):
     monkeypatch.setenv("TERA_BEARER_TOKEN", "real-token")
+    monkeypatch.delenv("TERA_AUTH_SCHEME", raising=False)
     monkeypatch.setenv("TERA_MCP_EXTRA_HEADERS", '{"Authorization": "nope", "x-team": "evals"}')
     headers = build_mcp_headers()
-    assert headers["Authorization"] == "Bearer real-token"
+    assert headers["Authorization"] == "ApiKey real-token"
     assert headers["x-team"] == "evals"
 
 
@@ -39,12 +43,13 @@ def test_invalid_extra_headers(monkeypatch):
 
 def test_http_client_carries_bearer(monkeypatch):
     monkeypatch.setenv("TERA_BEARER_TOKEN", "secret-token")
+    monkeypatch.delenv("TERA_AUTH_SCHEME", raising=False)
     monkeypatch.delenv("TERA_MCP_EXTRA_HEADERS", raising=False)
     client = build_http_client()
 
     async def _close():
         try:
-            assert client.headers["authorization"] == "Bearer secret-token"
+            assert client.headers["authorization"] == "ApiKey secret-token"
         finally:
             await client.aclose()
 

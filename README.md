@@ -98,7 +98,7 @@ uv venv && uv sync
 cp .env.example .env   # Bedrock model ids, AWS credentials, TERA_BEARER_TOKEN
 ```
 
-`TERA_MCP_URL` defaults to the preprod Tera gateway. The database scripts in
+`TERA_MCP_URL` is the original preprod Tera gateway. The key is sent as `Authorization: ApiKey <token>`. The database scripts in
 `db/` need to be loaded on the system that gateway can query
 (`TERA_DATABASE`, default `TeraTestingDB`).
 

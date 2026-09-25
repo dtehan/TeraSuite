@@ -60,10 +60,13 @@ def build_mcp_headers() -> dict[str, str]:
 
     token = os.environ.get("TERA_BEARER_TOKEN", "").strip()
     if token:
-        if token.lower().startswith("bearer "):
+        # Claude Desktop sends "Authorization: ApiKey <token>". A value that
+        # already includes ApiKey or Bearer is sent unchanged.
+        if token.lower().startswith(("apikey ", "bearer ")):
             headers["Authorization"] = token
         else:
-            headers["Authorization"] = f"Bearer {token}"
+            scheme = os.environ.get("TERA_AUTH_SCHEME", "ApiKey").strip() or "ApiKey"
+            headers["Authorization"] = f"{scheme} {token}"
     return headers
 
 
