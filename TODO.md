@@ -7,6 +7,7 @@ We need to show that the eval has control over the context window, and that each
 2. Testing prompts with Tera harness and MCP
 3. Testing prompts with Tera harness, skills and MCP
 4. Testing prompts with Tera harness, skills, other context (Database, files, etc) and MCP
+5. Testing prompts with Tera harness, skills, context engine, other context (Database, files, etc), and MCP with multiple turns
 
 
 ## Skills
