@@ -83,3 +83,49 @@ python3 scripts/verify_joins.py
 
 See `VERIFICATION.md` for the latest results and how they map to the
 Definition of Done.
+
+## Eval harness
+
+The harness sends each YAML prompt through a local Anthropic model on Amazon
+Bedrock. That model calls the Teradata Tera agent over MCP, using the bearer
+token in `.env`. A second Bedrock model grades the answer with
+[deepeval](https://github.com/confident-ai/deepeval) `GEval` metrics:
+behavior, SQL equivalence, result shape, and explanation points, whichever
+fields the case defines.
+
+```bash
+uv venv && uv sync
+cp .env.example .env   # Bedrock model ids, AWS credentials, TERA_BEARER_TOKEN
+```
+
+`TERA_MCP_URL` defaults to the preprod Tera gateway. The database scripts in
+`db/` need to be loaded on the system that gateway can query
+(`TERA_DATABASE`, default `TeraTestingDB`).
+
+```bash
+uv run python run_evals.py --list-cases
+uv run python run_evals.py --list-tools
+uv run python run_evals.py --persona business_user --case BU-001
+uv run python run_evals.py --category edge --limit 5
+uv run python run_evals.py --context minimal
+```
+
+`--context` controls what the local agent is allowed to see besides the prompt:
+
+| Mode | What the agent sees |
+|---|---|
+| `minimal` | The YAML prompt only |
+| `database` (default) | Prompt plus `TERA_DATABASE` |
+| `tables` | Prompt, database, and the case's `requires_tables` |
+
+The expected SQL and the expected answer stay with the judge. Open
+`results/latest_summary.md` after a run. Each case records pass/fail, the
+Tera tool calls, judge notes, billed Bedrock tokens, and elapsed time.
+`AGENT_MAX_TOKENS` fails a case before the judge when a turn exceeds that
+billed-token cap. `0` or unset means no cap.
+
+Offline tests (no Bedrock, no Tera):
+
+```bash
+uv run pytest
+```

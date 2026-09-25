@@ -1,0 +1,13 @@
+.env
+.venv
+.deepeval
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+*.sqlite3
+*.db
+results/
+dist/
+*.egg-info/
